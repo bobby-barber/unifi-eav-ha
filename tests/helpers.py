@@ -70,7 +70,7 @@ def devices_json(source_connected: bool = False, waiting: bool = True) -> list[d
                  "resolution": "auto", "refresh_rate": "30", "color_format": "rgb"},
                 {"port_index": "2", "type": "out", "up": False, "connected": False,
                  "resolution": "1080p", "refresh_rate": "60", "color_format": "rgb",
-                 "state": "WAITING_HOST_MODE" if is_waiting else "STREAMING"},
+                 "state": "WAITING_HOST_MODE" if is_waiting else "OPERATING"},
             ],
             "video_info": {"role": "client", "channel": 2, "mode": "unicast"},
         }

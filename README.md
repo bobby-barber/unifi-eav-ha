@@ -9,8 +9,9 @@ UniFi console. Nothing is installed on the bridges and Home Assistant never logs
   kept as fresh as the devices comfortably allow.
 
 > The console API used here is undocumented and reverse-engineered. A UniFi update could change
-> it. Reading is proven on real hardware; **writing is not fully proven yet**, which is why control
-> starts in a log-only "dry run" mode (see below).
+> it. Reading, and every kind of write (update, create, delete a route), has been verified on real
+> hardware with one source and one receiver. Routing **several receivers to one source** (multicast)
+> is untested. Control starts in a log-only "dry run" mode so you can see what it would do first.
 
 ## Install
 
@@ -40,6 +41,11 @@ Don't SSH into the bridges in a loop; an intrusion-prevention system may block y
 | `switch.<receiver>_output` | receiver | **Control.** Receiver's output on/off, keeps its source |
 | `switch.<source>_route` | source | **Control.** Starts/stops the whole route from that source |
 
+A receiver's `HDMI output state` has been seen as `OPERATING` (video flowing),
+`WAITING_HOST_MODE` (source is off: "Waiting for video input") and `CLIENT_STATE_SUSPENDING`
+(its route was disabled). "Waiting for source" is on only for `WAITING_HOST_MODE`, so turning a
+route off on purpose does not look like a source going away.
+
 `waiting_for_source` carries `source_device`, `source_signal`, `output_state`, `channel`.
 
 ## Control (routing)
@@ -58,6 +64,10 @@ group if it was the last receiver), then adds it to the new source's group (crea
 Groups with 2+ receivers use multicast, a single receiver uses unicast, and this is recomputed on
 both groups. The routing table is re-read from the console right before every change, so changes
 made in the UniFi app in the meantime are respected.
+
+**Permissions:** changing routes needs a UniFi OS account that can manage the Network app. A
+read-only account works for status and previews but the console answers changes with
+`403 No permission`. Use a limited, local-only account with Network admin rights.
 
 Not supported: changing a bridge between source and receiver (the console's way of doing that
 isn't known yet).
@@ -111,6 +121,6 @@ pip install pytest-homeassistant-custom-component PyTurboJPEG
 pytest tests
 ```
 
-51 tests run the integration inside Home Assistant against a mock console: login and cookies
+52 tests run the integration inside Home Assistant against a mock console: login and cookies
 (including a cookie jar that forgets cookies like Home Assistant's), routing plans, dry run versus
 live writes, switches, previews, caching and fallbacks, and failure handling.

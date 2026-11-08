@@ -168,7 +168,7 @@ async def test_status_changes_on_next_poll(hass, console) -> None:
     await poll(hass)
     assert state_of(hass, "binary_sensor", RX1, "waiting_for_source").state == "off"
     assert state_of(hass, "binary_sensor", TX1, "source_signal").state == "on"
-    assert state_of(hass, "sensor", RX1, "output_state").state == "STREAMING"
+    assert state_of(hass, "sensor", RX1, "output_state").state == "OPERATING"
 
 
 async def test_unavailable_not_false_when_console_drops(hass, console) -> None:
@@ -268,6 +268,14 @@ async def test_live_write_failure_raises_and_leaves_state(hass, console) -> None
     await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
     console.fail_next_write = 500
     with pytest.raises(HomeAssistantError):
+        await select(hass, RX3, "Apple TV")
+    assert routes(console) == {TX1: [RX1, RX2]}
+
+
+async def test_permission_error_explains_what_to_fix(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    console.fail_next_write = 403
+    with pytest.raises(HomeAssistantError, match="not allowed to change routes"):
         await select(hass, RX3, "Apple TV")
     assert routes(console) == {TX1: [RX1, RX2]}
 

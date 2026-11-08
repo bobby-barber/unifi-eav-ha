@@ -43,6 +43,10 @@ class EavAuthError(EavApiError):
     """Login failed (bad credentials, or the account can't use the console locally)."""
 
 
+class EavPermissionError(EavApiError):
+    """The console refused a change: the account can't manage the Network app."""
+
+
 class EavConnectionError(EavApiError):
     """Console unreachable or returned something unexpected."""
 
@@ -385,6 +389,13 @@ class EavConsoleClient:
                         raise EavAuthError("session rejected after re-login", 401)
                     _LOGGER.debug("session expired, logging in again")
                     return await self._request(method, url, body=body, raw=raw, retry=False)
+                if resp.status == 403 and method != "GET":
+                    raise EavPermissionError(
+                        "the console refused the change (HTTP 403). This account can read "
+                        "status but is not allowed to change routes: give it a role that can "
+                        "manage the Network app in UniFi OS (Admins & Users)",
+                        403,
+                    )
                 if resp.status >= 400:
                     text = (await resp.text())[:200]
                     raise EavConnectionError(f"{method} {url} -> HTTP {resp.status}: {text}",
