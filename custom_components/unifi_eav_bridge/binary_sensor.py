@@ -25,7 +25,7 @@ async def async_setup_entry(
     @callback
     def _add_new() -> None:
         new: list[EavEntity] = []
-        for mac, bridge in (coordinator.data or {}).items():
+        for mac, bridge in coordinator.bridges.items():
             if mac in known:
                 continue
             known.add(mac)

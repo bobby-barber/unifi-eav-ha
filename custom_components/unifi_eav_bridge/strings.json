@@ -1,0 +1,90 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "UniFi console",
+        "description": "Use a local UniFi OS account (not a Ubiquiti cloud/SSO login). A read-only role is enough.",
+        "data": {
+          "host": "Console address",
+          "username": "Username",
+          "password": "Password",
+          "site": "Site",
+          "verify_ssl": "Verify HTTPS certificate"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the console.",
+      "invalid_auth": "The console rejected that username or password.",
+      "no_bridges": "Logged in, but no EAV bridges were found on that site."
+    },
+    "abort": {
+      "already_configured": "That console is already set up.",
+      "reauth_successful": "Signed in again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "description": "Control lets Home Assistant change which source each receiver watches. Start with Dry run: it only logs what it would send.",
+        "data": {
+          "scan_interval": "Seconds between status updates",
+          "snapshot_interval": "Preview refresh (seconds a picture is reused)",
+          "control_mode": "Control"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      },
+      "source_signal": {
+        "name": "Source signal"
+      },
+      "waiting_for_source": {
+        "name": "Waiting for source"
+      }
+    },
+    "sensor": {
+      "output_state": {
+        "name": "HDMI output state"
+      }
+    },
+    "select": {
+      "source": {
+        "name": "Source"
+      }
+    },
+    "switch": {
+      "output_enabled": {
+        "name": "Output"
+      },
+      "route_enabled": {
+        "name": "Route"
+      }
+    },
+    "camera": {
+      "preview": {
+        "name": "Preview"
+      }
+    }
+  },
+  "selector": {
+    "control_mode": {
+      "options": {
+        "off": "Off (read-only)",
+        "dry_run": "Dry run (log only, send nothing)",
+        "live": "Live (send changes to the console)"
+      }
+    }
+  }
+}

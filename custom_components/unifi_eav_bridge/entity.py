@@ -21,7 +21,7 @@ class EavEntity(CoordinatorEntity):
 
     @property
     def bridge(self) -> Bridge | None:
-        return (self.coordinator.data or {}).get(self._mac)
+        return self.coordinator.bridges.get(self._mac)
 
     @property
     def available(self) -> bool:

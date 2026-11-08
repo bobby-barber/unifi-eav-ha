@@ -10,17 +10,28 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .api import EavAuthError, EavConnectionError, EavConsoleClient
 from .const import (
+    CONF_CONTROL_MODE,
     CONF_SCAN_INTERVAL,
     CONF_SITE,
+    CONF_SNAPSHOT_INTERVAL,
     CONF_VERIFY_SSL,
+    CONTROL_MODES,
+    DEFAULT_CONTROL_MODE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SITE,
+    DEFAULT_SNAPSHOT_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     MIN_SCAN_INTERVAL,
+    MIN_SNAPSHOT_INTERVAL,
 )
 
 
@@ -107,21 +118,36 @@ class UnifiEavConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class UnifiEavOptionsFlow(OptionsFlow):
-    """Polling interval."""
+    """Polling, preview refresh, and whether this integration may change routes."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
-        current = self.config_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        opts = self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_SCAN_INTERVAL, default=current): vol.All(
-                        int, vol.Range(min=MIN_SCAN_INTERVAL, max=600)
-                    )
+                    vol.Required(
+                        CONF_SCAN_INTERVAL,
+                        default=opts.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                    ): vol.All(int, vol.Range(min=MIN_SCAN_INTERVAL, max=600)),
+                    vol.Required(
+                        CONF_SNAPSHOT_INTERVAL,
+                        default=opts.get(CONF_SNAPSHOT_INTERVAL, DEFAULT_SNAPSHOT_INTERVAL),
+                    ): vol.All(int, vol.Range(min=MIN_SNAPSHOT_INTERVAL, max=300)),
+                    vol.Required(
+                        CONF_CONTROL_MODE,
+                        default=opts.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=CONTROL_MODES,
+                            translation_key="control_mode",
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
         )

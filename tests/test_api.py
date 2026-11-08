@@ -1,189 +1,219 @@
-"""Tests for the console client, run against a mock console (no Home Assistant needed).
-
-    python tests/test_api.py
-
-Uses the real shape of data captured from a UniFi Cloud Key Gen2 Plus with two
-EAV bridges: an Apple TV source and a projector receiver waiting for a source.
-"""
+"""Client and routing-planner tests against a mock console (no Home Assistant needed)."""
 
 from __future__ import annotations
 
-import asyncio
-import importlib.util
-import sys
-import types
-from pathlib import Path
-
-from aiohttp import web
-from aiohttp.test_utils import TestServer
 import aiohttp
+import pytest
+from aiohttp.test_utils import TestServer
 
-PKG_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "unifi_eav"
-
-
-def load_api():
-    """Import api.py/const.py without importing the package __init__ (needs HA)."""
-    pkg = types.ModuleType("unifi_eav_pkg")
-    pkg.__path__ = [str(PKG_DIR)]
-    sys.modules["unifi_eav_pkg"] = pkg
-    for name in ("const", "api"):
-        spec = importlib.util.spec_from_file_location(
-            f"unifi_eav_pkg.{name}", PKG_DIR / f"{name}.py"
-        )
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[f"unifi_eav_pkg.{name}"] = mod
-        spec.loader.exec_module(mod)
-    return sys.modules["unifi_eav_pkg.api"]
+from custom_components.unifi_eav_bridge import api
+from tests.helpers import (
+    IPS, MockConsole, RX1, RX2, RX3, TX1, TX2, default_groups, matrix_json,
+)
 
 
-api = load_api()
-
-TV_MAC = "02:00:00:00:00:01"
-PROJ_MAC = "02:00:00:00:00:02"
-
-
-def devices(source_connected: bool, waiting: bool):
-    return [
-        {  # an unrelated device (no hdmi_ports) must be ignored
-            "mac": "aa:bb:cc:dd:ee:ff",
-            "name": "Some Switch",
-            "state": 1,
-        },
-        {
-            "name": "VDS-01 Apple TV",
-            "mac": TV_MAC,
-            "state": 1,
-            "uptime": 13621,
-            "hdmi_ports": [
-                {"port_index": "1", "type": "in", "up": True,
-                 "connected": source_connected, "resolution": "auto",
-                 "refresh_rate": "30", "color_format": "rgb"},
-                {"port_index": "2", "type": "out", "up": False, "connected": False,
-                 "resolution": "auto", "refresh_rate": "30", "color_format": "rgb"},
-            ],
-            "video_info": {"channel": 2, "enabled": True, "role": "host",
-                           "refresh_rate": "60"},
-        },
-        {
-            "name": "VDS-02 Projector",
-            "mac": PROJ_MAC,
-            "state": 1,
-            "uptime": 13686,
-            "hdmi_ports": [
-                {"port_index": "1", "type": "in", "up": False, "connected": False,
-                 "resolution": "auto", "refresh_rate": "30", "color_format": "rgb"},
-                {"port_index": "2", "type": "out", "up": False, "connected": False,
-                 "resolution": "1080p", "refresh_rate": "60", "color_format": "rgb",
-                 **({"state": "WAITING_HOST_MODE"} if waiting else {"state": "STREAMING"})},
-            ],
-            "video_info": {"role": "client", "channel": 2, "mode": "unicast"},
-        },
-    ]
+@pytest.fixture(autouse=True)
+def _allow_local_sockets(socket_enabled):
+    """These tests talk to a local mock server; the HA plugin blocks sockets by default."""
+    yield
 
 
-class MockConsole:
-    def __init__(self):
-        self.source_connected = False
-        self.waiting = True
-        self.logins = 0
-        self.valid_token = "TOKEN-1"
-        self.csrf = "csrf-abc"
-        app = web.Application()
-        app.router.add_post("/api/auth/login", self.login)
-        app.router.add_get("/proxy/network/api/s/{site}/stat/device", self.stat_device)
-        self.app = app
-
-    async def login(self, req):
-        body = await req.json()
-        if body.get("password") != "good-password":
-            return web.json_response({"error": {"code": 401}}, status=401)
-        self.logins += 1
-        self.valid_token = f"TOKEN-{self.logins}"
-        resp = web.json_response({"ok": True})
-        resp.set_cookie("TOKEN", self.valid_token)
-        resp.headers["X-CSRF-Token"] = self.csrf
-        return resp
-
-    async def stat_device(self, req):
-        if req.cookies.get("TOKEN") != self.valid_token:
-            return web.json_response({"meta": {"rc": "error"}, "data": []}, status=401)
-        if req.headers.get("X-CSRF-Token") != self.csrf:
-            return web.json_response({"meta": {"rc": "error"}, "data": []}, status=403)
-        return web.json_response(
-            {"meta": {"rc": "ok"}, "data": devices(self.source_connected, self.waiting)}
-        )
-
-
-async def main() -> int:
-    failures = 0
-
-    def check(label, cond):
-        nonlocal failures
-        print(("PASS " if cond else "FAIL ") + label)
-        if not cond:
-            failures += 1
-
-    console = MockConsole()
-    server = TestServer(console.app)
+@pytest.fixture
+async def console():
+    mock = MockConsole()
+    server = TestServer(mock.app)
     await server.start_server()
-    host = f"{server.host}:{server.port}"
-
-    # The client always uses https; point it at the plain-HTTP mock.
-    class HttpClient(api.EavConsoleClient):
-        def __init__(self, *a, **k):
-            super().__init__(*a, **k)
-            self._base = f"http://{host}"
-
-    async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as s:
-        client = HttpClient(s, host, "ha", "good-password")
-
-        bridges = await client.async_get_bridges()
-        check("only the two EAV bridges are returned", set(bridges) == {TV_MAC, PROJ_MAC})
-        tv, proj = bridges[TV_MAC], bridges[PROJ_MAC]
-        check("Apple TV bridge is the host", tv.role == "host")
-        check("projector bridge is the client", proj.role == "client")
-        check("source signal is off when Apple TV is off", tv.source_signal is False)
-        check("projector is waiting for source", proj.waiting_for_source is True)
-        check("both bridges online", tv.online and proj.online)
-        check("channel recorded", tv.channel == proj.channel == 2)
-        check("host has no 'waiting' state (not applicable)", tv.waiting_for_source is None)
-
-        console.source_connected = True
-        console.waiting = False
-        bridges = await client.async_get_bridges()
-        check("source signal on when Apple TV is on", bridges[TV_MAC].source_signal is True)
-        check("projector no longer waiting", bridges[PROJ_MAC].waiting_for_source is False)
-
-        # Session expiry: the console forgets our token; client must re-login once.
-        logins_before = console.logins
-        console.valid_token = "something-else"
-        bridges = await client.async_get_bridges()
-        check("recovers from an expired session", set(bridges) == {TV_MAC, PROJ_MAC})
-        check("re-logged in exactly once", console.logins == logins_before + 1)
-
-    # Bad password
-    async with aiohttp.ClientSession() as s:
-        bad = HttpClient(s, host, "ha", "wrong")
-        try:
-            await bad.async_get_bridges()
-            check("bad password raises EavAuthError", False)
-        except api.EavAuthError:
-            check("bad password raises EavAuthError", True)
-
-    # Unreachable console
-    async with aiohttp.ClientSession() as s:
-        dead = api.EavConsoleClient(s, "127.0.0.1:9", "ha", "x")
-        dead._base = "http://127.0.0.1:9"
-        try:
-            await dead.async_get_bridges()
-            check("unreachable console raises EavConnectionError", False)
-        except api.EavConnectionError:
-            check("unreachable console raises EavConnectionError", True)
-
+    mock.url = f"http://{server.host}:{server.port}"
+    yield mock
     await server.close()
-    print(f"\n{'ALL PASSED' if not failures else str(failures) + ' FAILED'}")
-    return failures
 
 
-if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+@pytest.fixture
+async def client(console):
+    # DummyCookieJar discards every cookie, like Home Assistant's sessions do for
+    # consoles addressed by IP. The client must forward cookies itself.
+    async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as s:
+        yield api.EavConsoleClient(s, console.url, "ha", "good-password")
+
+
+def matrix(groups=None) -> api.Matrix:
+    return api.parse_matrix(matrix_json(groups if groups is not None else default_groups()))
+
+
+# ---- reads --------------------------------------------------------------------
+
+async def test_reads_with_a_cookie_jar_that_forgets_cookies(client) -> None:
+    data = await client.async_get_data()
+    assert set(data.bridges) == {TX1, TX2, RX1, RX2, RX3}  # "Some Switch" ignored
+    assert data.bridges[TX1].role == "host" and data.bridges[RX1].role == "client"
+    assert data.bridges[TX1].ip == IPS[TX1]
+    assert data.matrix.hosts == [TX1, TX2]
+    assert data.matrix.group_of_client(RX2)["host"]["mac"] == TX1
+
+
+async def test_status_fields(client, console) -> None:
+    data = await client.async_get_data()
+    assert data.bridges[TX1].source_signal is False
+    assert data.bridges[RX1].waiting_for_source is True
+    assert data.bridges[TX1].waiting_for_source is None
+
+
+async def test_session_expiry_relogs_in_once(client, console) -> None:
+    await client.async_get_data()
+    before = console.logins
+    console.token = "rotated-by-console"
+    await client.async_get_data()
+    assert console.logins == before + 1
+
+
+async def test_bad_password(console) -> None:
+    async with aiohttp.ClientSession() as s:
+        bad = api.EavConsoleClient(s, console.url, "ha", "nope")
+        with pytest.raises(api.EavAuthError):
+            await bad.async_get_data()
+
+
+async def test_unreachable() -> None:
+    async with aiohttp.ClientSession() as s:
+        dead = api.EavConsoleClient(s, "http://127.0.0.1:9", "ha", "x")
+        with pytest.raises(api.EavConnectionError):
+            await dead.async_get_data()
+
+
+async def test_snapshot_fallback_endpoint(client, console) -> None:
+    assert await client.async_get_snapshot(TX1) == console.JPEG
+
+
+# ---- planner (pure) ---------------------------------------------------------------
+
+def test_noop_when_already_routed() -> None:
+    assert api.plan_route(matrix(), RX1, TX1) == []
+
+
+def test_noop_unrouting_an_unrouted_receiver() -> None:
+    assert api.plan_route(matrix(), RX3, None) == []
+
+
+def test_unrouted_receiver_joins_existing_group_and_modes_update() -> None:
+    ops = api.plan_route(matrix(), RX3, TX1)
+    assert [o.method for o in ops] == ["PUT"]
+    clients = ops[0].body["clients"]
+    assert [c["mac"] for c in clients] == [RX1, RX2, RX3]
+    assert {c["mode"] for c in clients} == {"MULTICAST"}
+    assert ops[0].body["id"] == "g-tv"  # full object is sent back
+
+
+def test_unrouted_receiver_gets_a_new_group_for_a_source_without_one() -> None:
+    ops = api.plan_route(matrix(), RX3, TX2, tx_name="Game Console")
+    assert [o.method for o in ops] == ["POST"]
+    body = ops[0].body
+    assert body["name"] == "Game Console" and body["host"]["mac"] == TX2
+    assert [c["mac"] for c in body["clients"]] == [RX3]
+    assert body["clients"][0]["mode"] == "UNICAST"
+    assert "id" not in body
+
+
+def test_move_between_groups_shrinks_old_and_recomputes_modes() -> None:
+    # RX2 leaves the Apple TV group (2 -> 1 receiver, so unicast) and gets a new group.
+    ops = api.plan_route(matrix(), RX2, TX2, tx_name="Game Console")
+    assert [o.method for o in ops] == ["PUT", "POST"]
+    old = ops[0].body
+    assert [c["mac"] for c in old["clients"]] == [RX1]
+    assert old["clients"][0]["mode"] == "UNICAST"
+    assert ops[1].body["host"]["mac"] == TX2
+
+
+def test_leaving_receiver_keeps_its_settings() -> None:
+    groups = default_groups()
+    groups[0]["clients"][1].update(resolution="1080p", audio_enabled=False)
+    ops = api.plan_route(matrix(groups), RX2, TX2)
+    joined = ops[-1].body["clients"][0]
+    assert joined["resolution"] == "1080p" and joined["audio_enabled"] is False
+
+
+def test_last_receiver_leaving_deletes_the_group() -> None:
+    groups = default_groups()
+    groups[0]["clients"] = groups[0]["clients"][:1]  # only the projector
+    ops = api.plan_route(matrix(groups), RX1, TX2)
+    assert [o.method for o in ops] == ["DELETE", "POST"]
+    assert ops[0].group_id == "g-tv"
+
+
+def test_disconnect_receiver() -> None:
+    ops = api.plan_route(matrix(), RX2, None)
+    assert [o.method for o in ops] == ["PUT"]
+    assert [c["mac"] for c in ops[0].body["clients"]] == [RX1]
+
+
+def test_planner_does_not_mutate_input() -> None:
+    m = matrix()
+    before = repr(m.groups)
+    api.plan_route(m, RX2, TX2)
+    api.plan_route(m, RX3, TX1)
+    assert repr(m.groups) == before
+
+
+def test_group_and_client_enable_planners() -> None:
+    m = matrix()
+    ops = api.plan_group_enabled(m, "g-tv", False)
+    assert ops[0].body["enabled"] is False and ops[0].method == "PUT"
+    assert api.plan_group_enabled(m, "g-tv", True) == []
+    ops = api.plan_client_enabled(m, RX2, False)
+    assert [c["enabled"] for c in ops[0].body["clients"]] == [True, False]
+    with pytest.raises(api.EavApiError):
+        api.plan_client_enabled(m, RX3, False)  # not routed
+    with pytest.raises(api.EavApiError):
+        api.plan_group_enabled(m, "nope", True)
+
+
+# ---- applying plans to the mock console ---------------------------------------------
+
+async def apply(client, console, rx, tx, name="Source"):
+    data = await client.async_get_data()
+    ops = api.plan_route(data.matrix, rx, tx, tx_name=name)
+    await client.async_apply(ops)
+    return ops
+
+
+def final_routes(console) -> dict[str, list[str]]:
+    return {g["host"]["mac"]: [c["mac"] for c in g["clients"]] for g in console.groups}
+
+
+async def test_apply_join_existing(client, console) -> None:
+    await apply(client, console, RX3, TX1)
+    assert final_routes(console) == {TX1: [RX1, RX2, RX3]}
+
+
+async def test_apply_move_to_new_group(client, console) -> None:
+    await apply(client, console, RX2, TX2, "Game Console")
+    assert final_routes(console) == {TX1: [RX1], TX2: [RX2]}
+    assert all(c["mode"] == "UNICAST" for g in console.groups for c in g["clients"])
+
+
+async def test_apply_move_then_move_back(client, console) -> None:
+    await apply(client, console, RX2, TX2, "Game Console")
+    await apply(client, console, RX2, TX1)
+    assert final_routes(console) == {TX1: [RX1, RX2]}  # empty TX2 group was removed
+
+
+async def test_apply_disconnect(client, console) -> None:
+    await apply(client, console, RX2, None)
+    assert final_routes(console) == {TX1: [RX1]}
+
+
+async def test_writes_carry_csrf_and_cookie(client, console) -> None:
+    await apply(client, console, RX3, TX1)  # would 403/401 without them
+    assert console.writes and console.writes[0][0] == "PUT"
+
+
+async def test_write_failure_is_reported_with_status(client, console) -> None:
+    console.fail_next_write = 500
+    with pytest.raises(api.EavConnectionError) as err:
+        await apply(client, console, RX3, TX1)
+    assert err.value.status == 500
+
+
+async def test_group_toggle_applies(client, console) -> None:
+    data = await client.async_get_data()
+    await client.async_apply(api.plan_group_enabled(data.matrix, "g-tv", False))
+    assert console.groups[0]["enabled"] is False

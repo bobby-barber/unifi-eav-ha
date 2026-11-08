@@ -1,47 +1,78 @@
-# UniFi EAV Bridge Status (Home Assistant)
+# UniFi EAV Bridge for Home Assistant
 
-Reads the live HDMI state of Ubiquiti **EAV-Bridge** devices from your UniFi console, so
-automations can react to things like *"the receiver is waiting for a source"*.
+Status, control and live previews for Ubiquiti **EAV-Bridge** (Pro AV) devices, through your
+UniFi console. Nothing is installed on the bridges and Home Assistant never logs into them.
 
-Why it exists: the bridges have no public API, but each one reports its HDMI ports to the
-UniFi Network app, and the console exposes that data. This integration polls the console
-(no SSH to the bridges, nothing installed on them).
+* **Status**: is a source on, is a receiver "Waiting for video input", is a bridge online.
+* **Control**: choose which source each receiver watches, enable or disable routes. Off by default.
+* **Previews**: a camera per bridge showing its HDMI input (sources) or screen (receivers),
+  kept as fresh as the devices comfortably allow.
 
-## Entities
-
-For each bridge, depending on its role:
-
-| Entity | On a... | Meaning |
-|---|---|---|
-| `binary_sensor.<bridge>_online` | any bridge | Console sees the bridge as connected |
-| `binary_sensor.<source>_source_signal` | source (host) | A device (Apple TV etc.) is feeding the HDMI input |
-| `binary_sensor.<receiver>_waiting_for_source` | receiver (client) | Bridge is showing "Waiting for video input..." |
-| `sensor.<receiver>_hdmi_output_state` | receiver (client) | The firmware's raw state string (e.g. `WAITING_HOST_MODE`) |
-
-`waiting_for_source` also carries attributes: `source_device`, `source_signal` (looks up the
-transmitter on the same channel), `output_state`, `channel`.
+> The console API used here is undocumented and reverse-engineered. A UniFi update could change
+> it. Reading is proven on real hardware; **writing is not fully proven yet**, which is why control
+> starts in a log-only "dry run" mode (see below).
 
 ## Install
 
-**With HACS (recommended)**
+1. In Home Assistant open **HACS**, three dots (top right), **Custom repositories**.
+2. Paste this repository's URL, category **Integration**, **Add**.
+3. Find **UniFi EAV Bridge** in HACS, **Download**, then restart Home Assistant.
+4. Settings, Devices & services, Add integration, **UniFi EAV Bridge**.
+5. Enter your console address, a **local** UniFi OS account (not a Ubiquiti cloud login) and its
+   password. Leave "Verify HTTPS certificate" off for the console's self-signed certificate.
 
-1. In Home Assistant open **HACS**, click the three dots (top right), then **Custom repositories**.
-2. Paste this repository's URL, set the category to **Integration**, and click **Add**.
-3. Find **UniFi EAV Bridge Status** in HACS, click **Download**, then restart Home Assistant.
-4. Go to Settings, Devices & services, Add integration, **UniFi EAV Bridge Status**.
-5. Enter the console address (e.g. `192.168.1.2`), a **local** UniFi OS account
-   (not a Ubiquiti cloud login), and its password. Leave "Verify HTTPS certificate" off for
-   the console's self-signed certificate.
+Manual install: copy `custom_components/unifi_eav_bridge` into `<config>/custom_components/`.
 
-**Manually:** copy `custom_components/unifi_eav` into `<config>/custom_components/`, restart
-Home Assistant, then do step 4 and 5 above.
+Network notes: Home Assistant must reach the console on port 443. For previews it should also
+reach each bridge on port 8080 (if it can't, previews fall back to the console's snapshot).
+Don't SSH into the bridges in a loop; an intrusion-prevention system may block you.
 
-The account only needs to read device status. A read-only role is enough.
+## Entities
 
-If Home Assistant sits on a different VLAN than the console, allow it through the firewall
-to the console on 443.
+| Entity | On | Meaning |
+|---|---|---|
+| `binary_sensor.<bridge>_online` | every bridge | Console sees the bridge as connected |
+| `binary_sensor.<source>_source_signal` | source | A device (Apple TV etc.) is feeding the HDMI input |
+| `binary_sensor.<receiver>_waiting_for_source` | receiver | Showing "Waiting for video input..." |
+| `sensor.<receiver>_hdmi_output_state` | receiver | Raw firmware state (e.g. `WAITING_HOST_MODE`) |
+| `camera.<bridge>_preview` | every bridge | Picture from the bridge, plus a live stream |
+| `select.<receiver>_source` | receiver | **Control.** Which source it watches, or `Disconnected` |
+| `switch.<receiver>_output` | receiver | **Control.** Receiver's output on/off, keeps its source |
+| `switch.<source>_route` | source | **Control.** Starts/stops the whole route from that source |
 
-## Example: turn the projector off when the source goes away
+`waiting_for_source` carries `source_device`, `source_signal`, `output_state`, `channel`.
+
+## Control (routing)
+
+Options, **Control**:
+
+* **Off** (default): read-only. No control entities exist.
+* **Dry run**: control entities exist, but nothing is sent. What *would* be sent is logged at
+  WARNING level, fired as the `unifi_eav_bridge_dry_run` event, and shown in the select's
+  `last_plan` attribute. **Start here**, try your automations, and read the plan.
+* **Live**: changes are sent to the console.
+
+How a route change works: a source has one "group" listing the receivers that watch it, and a
+receiver is in only one group. Switching a receiver removes it from its old group (deleting the
+group if it was the last receiver), then adds it to the new source's group (creating it if needed).
+Groups with 2+ receivers use multicast, a single receiver uses unicast, and this is recomputed on
+both groups. The routing table is re-read from the console right before every change, so changes
+made in the UniFi app in the meantime are respected.
+
+Not supported: changing a bridge between source and receiver (the console's way of doing that
+isn't known yet).
+
+### Example: switch the projector to the game console
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.vds_02_projector_source
+data:
+  option: Game Console
+```
+
+### Example: projector off when the source goes away
 
 ```yaml
 alias: Projector off when source is off
@@ -52,37 +83,34 @@ triggers:
     to: "on"
     for: "00:02:00"        # ignore short drops, e.g. the Apple TV waking up
 actions:
-  - action: switch.turn_off      # use whatever turns YOUR projector off
+  - action: switch.turn_off      # whatever turns YOUR projector off
     target:
       entity_id: switch.projector
 ```
 
-And the reverse, turning it on when the source comes back:
+## Previews
 
-```yaml
-alias: Projector on when source is on
-mode: single
-triggers:
-  - trigger: state
-    entity_id: binary_sensor.vds_01_apple_tv_source_signal
-    to: "on"
-actions:
-  - action: switch.turn_on
-    target:
-      entity_id: switch.projector
-```
+Each bridge serves a small MJPEG preview on port 8080 (no login). The camera:
 
-Entity IDs come from your bridge names in UniFi, so check yours under Developer tools, States.
+* fetches a picture on demand and reuses it for **Preview refresh** seconds (default 3), so many
+  viewers cost the bridge one request;
+* throws the picture away immediately when the bridge's signal or routing changes, so a freshly
+  switched source shows right away;
+* passes the bridge's own live stream through for the camera's video view;
+* falls back to the console's snapshot if the bridge can't be reached, and keeps the last good
+  picture if everything is down.
+
+`image_source` (`bridge` or `console`) shows where the last picture came from. Dashboards pull a
+new picture about every 10 s with a picture card; use the live view for continuous video. The
+bridges are small devices, so keep the refresh interval at a few seconds.
 
 ## Tests
 
 ```bash
-python tests/test_api.py     # needs aiohttp; runs against a mock console
+pip install pytest-homeassistant-custom-component PyTurboJPEG
+pytest tests
 ```
 
-## Notes and limits
-
-- The console API used here is not officially documented, so a UniFi update could change it.
-- Polling every 15 seconds by default (adjustable in the integration's options).
-- Don't log into the bridges over SSH in a tight loop: the gateway's intrusion prevention can
-  block you. This integration never touches the bridges directly.
+51 tests run the integration inside Home Assistant against a mock console: login and cookies
+(including a cookie jar that forgets cookies like Home Assistant's), routing plans, dry run versus
+live writes, switches, previews, caching and fallbacks, and failure handling.
