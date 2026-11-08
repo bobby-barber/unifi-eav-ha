@@ -114,6 +114,16 @@ Each bridge serves a small MJPEG preview on port 8080 (no login). The camera:
 new picture about every 10 s with a picture card; use the live view for continuous video. The
 bridges are small devices, so keep the refresh interval at a few seconds.
 
+## Documentation
+
+Everything we learned about the bridges, including the API, internals, preview tuning, and
+measured numbers, is in [`docs/`](docs/README.md):
+
+* [Capabilities](docs/capabilities.md): what works and how well it is proven
+* [Console API](docs/console-api.md) and [bridge internals](docs/bridge-internals.md)
+* [Preview quality](docs/preview-quality.md): raising the preview to 720p, with measurements
+* [Measurements](docs/measurements.md), [gotchas](docs/gotchas.md), and [open questions](docs/open-questions.md)
+
 ## Tests
 
 ```bash
