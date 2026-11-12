@@ -12,6 +12,8 @@ The short version:
 * So this module logs in to each bridge over SSH and runs ``cec_bridge.sh``, which starts the
   SDK's CEC service from a temporary copy with CEC switched on. It does that when a route
   appears or changes, when a bridge restarts, and every ``CEC_RECHECK_SECONDS`` as a check.
+  A bridge left set up but not linked yet is looked at again sooner (``CEC_SETTLE_SECONDS``,
+  doubling each time), so its status catches up and a source that stopped serving is restarted.
 
 Planning (which bridge needs what) is a pure function, ``plan_cec``. ``CecManager`` decides
 when to run the script and remembers results; the SSH transport is passed in, so tests use a
@@ -37,6 +39,7 @@ from .const import (
     CEC_RECHECK_SECONDS,
     CEC_RETRY_SECONDS,
     CEC_SCRIPT_TIMEOUT,
+    CEC_SETTLE_SECONDS,
     CEC_WAITING,
     ROLE_CLIENT,
     ROLE_HOST,
@@ -191,6 +194,7 @@ class BridgeCec:
     last_run: float | None = None  # time.time() of the last SSH run
     uptime: int | None = None  # console-reported uptime at the last look (restart detection)
     dry_run_logged: CecTarget | None = None
+    unsettled: int = 0  # runs in a row that left it set up but not linked (sets the backoff)
 
     def attributes(self) -> dict[str, Any]:
         return {
@@ -252,7 +256,13 @@ class CecManager:
             return True
         if want.mode == MODE_OFF:
             return False
-        return since is None or since >= CEC_RECHECK_SECONDS
+        if since is None:
+            return True
+        if st.status in (CEC_WAITING, CEC_PENDING) and st.unsettled:
+            # Set up but not linked yet: look again soon, backing off (2, 4, 8, ... minutes).
+            settle = CEC_SETTLE_SECONDS * 2 ** (st.unsettled - 1)
+            return since >= min(settle, CEC_RECHECK_SECONDS)
+        return since >= CEC_RECHECK_SECONDS
 
     async def async_sync(self, bridges: dict[str, Bridge], matrix: Matrix) -> bool:
         """Bring every bridge in line with the routing table. Returns True if anything changed.
@@ -331,7 +341,7 @@ class CecManager:
                 if t.mode == MODE_CLIENT and t.arg == bridges[mac].ip
             ]
             if st.status == CEC_WAITING and any(r.status == CEC_LINKED for r in receivers):
-                st.status, changed = CEC_LINKED, True
+                st.status, st.unsettled, changed = CEC_LINKED, 0, True
         return changed
 
     async def _run(self, mac: str, bridge: Bridge, want: CecTarget) -> None:
@@ -342,8 +352,11 @@ class CecManager:
             result = parse_result(output)
         except Exception as err:  # noqa: BLE001 - any transport failure is reported the same way
             result = CecResult(result="error", detail=str(err) or type(err).__name__)
+        if st.applied != want:
+            st.unsettled = 0  # a new target starts its backoff over
         st.result = result
         st.status = status_from(want, result)
+        st.unsettled = st.unsettled + 1 if st.status in (CEC_WAITING, CEC_PENDING) else 0
         if result.success:
             st.applied = want
             _LOGGER.info("CEC: %s %s -> %s (%s)", bridge.name, want.command, result.result,

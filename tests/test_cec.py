@@ -33,6 +33,7 @@ from custom_components.unifi_eav_bridge.const import (
     CEC_PENDING,
     CEC_RECHECK_SECONDS,
     CEC_RETRY_SECONDS,
+    CEC_SETTLE_SECONDS,
     CEC_WAITING,
 )
 from tests.helpers import IPS, RX1, RX2, RX3, TX1, TX2, client, devices_json, group, matrix_json
@@ -152,6 +153,7 @@ class FakeBridges:
         self.calls: list[tuple[str, str]] = []  # (mac, command)
         self.fail: set[str] = set()
         self.raise_for: set[str] = set()
+        self.state: dict[str, str] = {}  # mac -> link state to report instead of the usual
 
     async def __call__(self, mac, ip, command, script):
         assert script.startswith("#!/bin/bash")
@@ -162,6 +164,7 @@ class FakeBridges:
         if mac in self.fail:
             return f"HA_CEC result=error mode={mode} state=s_search target=none detail=boom"
         state = {"host": "s_pre_start_srv", "client": "s_srv_on", "off": "none"}[mode]
+        state = self.state.get(mac, state)
         result = "stopped" if mode == "off" else "started"
         return f"HA_CEC result={result} mode={mode} state={state} target=x detail=ok"
 
@@ -292,8 +295,50 @@ async def test_errors_wait_before_retrying() -> None:
     fake.raise_for.clear()
     clock.now += CEC_RETRY_SECONDS
     await mgr.async_sync(*system())
-    assert [c[0] for c in fake.calls] == [RX1, RX2]
+    # The source was left waiting, so it is looked at again too (sources first).
+    assert [c[0] for c in fake.calls] == [TX1, RX1, RX2]
     assert mgr.bridges[RX1].status == CEC_LINKED
+
+
+async def test_unlinked_bridges_are_checked_again_soon() -> None:
+    # Tonight's case: the receiver was still searching when its run ended, so both showed
+    # "Waiting"/"Pending" for half an hour after the link had come up on its own.
+    mgr, fake, clock = manager()
+    fake.state[RX1] = fake.state[RX2] = "s_search"
+    await mgr.async_sync(*system())
+    assert mgr.bridges[TX1].status == CEC_WAITING
+    assert mgr.bridges[RX1].status == CEC_PENDING
+    fake.calls.clear()
+    clock.now += CEC_SETTLE_SECONDS - 1
+    await mgr.async_sync(*system())
+    assert fake.calls == []  # not yet
+    fake.state.clear()  # the receivers linked meanwhile
+    clock.now += 1
+    await mgr.async_sync(*system())
+    assert [c[0] for c in fake.calls] == [TX1, RX1, RX2]
+    assert {mgr.bridges[m].status for m in (TX1, RX1, RX2)} == {CEC_LINKED}
+    fake.calls.clear()
+    clock.now += CEC_SETTLE_SECONDS * 4
+    await mgr.async_sync(*system())
+    assert fake.calls == []  # linked: back to the half-hourly check
+
+
+async def test_unlinked_checks_back_off() -> None:
+    mgr, fake, clock = manager()
+    fake.state[RX1] = fake.state[RX2] = "s_search"  # never links
+    await mgr.async_sync(*system())
+    times = []
+    start = clock.now
+    for _ in range(int(3 * CEC_RECHECK_SECONDS / 60)):
+        clock.now += 60
+        fake.calls.clear()
+        await mgr.async_sync(*system())
+        if (RX1, f"bash -s -- client {IPS[TX1]}") in fake.calls:
+            times.append(int(clock.now - start))
+    gaps = [b - a for a, b in zip([0, *times], times)]
+    s = CEC_SETTLE_SECONDS
+    assert gaps[:4] == [s, 2 * s, 4 * s, 8 * s]
+    assert max(gaps) == CEC_RECHECK_SECONDS  # capped at the normal recheck
 
 
 async def test_dry_run_runs_nothing() -> None:

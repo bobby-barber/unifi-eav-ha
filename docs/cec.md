@@ -58,14 +58,18 @@ It then logs in only where something is due:
 * a route appeared, changed source, or got a new channel;
 * a bridge restarted (its uptime went down) or came back online;
 * an error is 5 minutes old (retry);
-* 30 minutes passed since the last check of a working bridge.
+* a bridge was set up but isn't linked yet (`waiting` or `pending`): checked again after
+  2 minutes, then 4, 8, 16, and at most every 30 minutes. This keeps the sensor from sitting on
+  `waiting` after the link came up, and restarts a source that stopped serving;
+* 30 minutes passed since the last check of a linked bridge.
 
 A bridge that leaves every route gets `off` once. One bridge is handled at a time, sources before
 their receivers, and a round never overlaps another. Polling never waits for SSH.
 
 Why so careful with logins: UniFi gateways with intrusion prevention can block a host that opens
 many SSH sessions (see [gotchas](gotchas.md#the-gateways-intrusion-prevention-can-block-ssh-to-the-bridges)).
-A steady system costs one login per bridge every 30 minutes.
+A steady, linked system costs one login per bridge every 30 minutes; a link that won't come up
+costs about five logins per bridge in its first half hour, then one every 30 minutes.
 
 When a source restarts, its receivers are left running: they keep looking for it, and reattach on
 their own once it is set up again (**Observed**).
@@ -204,6 +208,15 @@ server; the hardware run used a key). The bridge runs dropbear, which accepts pa
 * To undo UniFi's own switch as well: `ubus call hal cec '{"enable":false}'` on the bridge.
 
 ## Troubleshooting
+
+**The CEC sensor goes `off`, then `waiting`, while nothing seemed to change.** Look for a route
+that was removed and created again (a receiver disconnected and reconnected, from Home Assistant
+or the UniFi app). Removing a route stops forwarding on its bridges (`off`); the new route is set
+up from scratch (`waiting` until a receiver links). On 2026-11-11 between 22:58 and 23:02 the
+console log (`/data/unifi/logs/access.log`) showed two DELETE + POST pairs on
+`proav/video/group`, matching VDS-01's sensor history exactly. A recreated route also gets a new
+id and may get a new channel. In v0.4.0 the sensor could then sit on `waiting` for up to 30
+minutes; from v0.4.1 unlinked bridges are checked again after 2 minutes.
 
 | Symptom | Look at |
 |---|---|

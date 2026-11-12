@@ -68,6 +68,11 @@ CEC_SCRIPT_TIMEOUT = 90  # seconds the bridge script may take (it waits for the 
 # one SSH login, and UniFi gateways with IPS can block hosts that log in to SSH a lot.
 CEC_RECHECK_SECONDS = 30 * 60
 CEC_RETRY_SECONDS = 5 * 60  # after an error
+# A bridge that was set up but isn't linked yet (source waiting, receiver still searching) is
+# checked again after this long, then twice as long each time, up to CEC_RECHECK_SECONDS.
+# Without it, a "Waiting" or "Pending" status could sit for half an hour after the link came up
+# (or a source that stopped serving went unnoticed for that long).
+CEC_SETTLE_SECONDS = 2 * 60
 
 # Values of the per-bridge "CEC" sensor.
 CEC_LINKED = "linked"  # source with a receiver attached, or receiver linked to its source

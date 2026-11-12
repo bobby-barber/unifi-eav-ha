@@ -141,7 +141,8 @@ on for you:
 
 Home Assistant then logs in to the bridges over SSH (TCP 22) and starts forwarding between each
 source and the receivers routed to it. It does it again whenever a route changes or a bridge
-restarts, because nothing on a bridge survives a restart, and checks every 30 minutes otherwise.
+restarts, because nothing on a bridge survives a restart, checks a link that hasn't come up yet
+after 2 minutes (backing off), and checks every 30 minutes otherwise.
 Each bridge gets a **CEC** sensor showing whether it's linked.
 
 **Verified** on one source and one receiver (Apple TV to an LG TV, on and off). Read
