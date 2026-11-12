@@ -1,10 +1,14 @@
 # UniFi EAV Bridge for Home Assistant
 
 Status, control and live previews for Ubiquiti **EAV-Bridge** (Pro AV) devices, through your
-UniFi console. Nothing is installed on the bridges and Home Assistant never logs into them.
+UniFi console. Nothing is installed on the bridges, and Home Assistant only logs into them if you
+turn on CEC forwarding.
 
 * **Status**: is a source on, is a receiver "Waiting for video input", is a bridge online.
-* **Control**: choose which source each receiver watches, enable or disable routes. Off by default.
+* **Control**: choose which source each receiver watches, enable or disable routes, set a
+  receiver's audio mode, change a bridge between source and receiver. Off by default.
+* **CEC forwarding** (optional): the TV follows its source on and off through the bridges, like
+  it would plugged in directly. UniFi's firmware has this switched off; see below.
 * **Previews**: a camera per bridge showing its HDMI input (sources) or screen (receivers),
   kept as fresh as the devices comfortably allow.
 
@@ -26,7 +30,8 @@ Manual install: copy `custom_components/unifi_eav_bridge` into `<config>/custom_
 
 Network notes: Home Assistant must reach the console on port 443. For previews it should also
 reach each bridge on port 8080 (if it can't, previews fall back to the console's snapshot).
-Don't SSH into the bridges in a loop; an intrusion-prevention system may block you.
+With CEC forwarding on, it also needs TCP 22 on each bridge. Don't SSH into the bridges in a loop
+yourself; an intrusion-prevention system may block you (the integration keeps its own logins rare).
 
 ## Entities
 
@@ -38,6 +43,8 @@ Don't SSH into the bridges in a loop; an intrusion-prevention system may block y
 | `sensor.<receiver>_hdmi_output_state` | receiver | Raw firmware state (e.g. `WAITING_HOST_MODE`) |
 | `camera.<bridge>_preview` | every bridge | Picture from the bridge, plus a live stream |
 | `select.<receiver>_source` | receiver | **Control.** Which source it watches, or `Disconnected` |
+| `select.<receiver>_audio_mode` | receiver | **Control.** `Auto` or `PCM`; unavailable while the receiver isn't routed. See below |
+| `sensor.<bridge>_cec` | every bridge | **CEC forwarding on.** `linked`, `waiting`, `off`, `pending`, `error`, `dry_run` |
 | `select.<bridge>_role` | every bridge | **Control.** Source or Receiver. Reboots the bridge (3–5 min) and can rearrange routes; see below |
 | `switch.<receiver>_output` | receiver | **Control.** Receiver's output on/off, keeps its source |
 | `switch.<source>_route` | source | **Control.** Starts/stops the whole route from that source |
@@ -83,6 +90,18 @@ unavailable while ones for the new role appear. Be careful:
 * It uses the same call as the Network app's "Convert to Output" button; details in
   [docs/console-api.md](docs/console-api.md#changing-a-bridges-role-source-or-receiver).
 
+### Receiver audio mode
+
+Each receiver has an **Audio mode** select: **Auto** (default; passes the source's audio through)
+or **PCM**. It's stored on the receiver's entry in its route, so it needs the receiver to be routed.
+Changing it sends one route update and leaves the route itself alone (**Verified**).
+
+PCM is **not a stereo downmix**. With a 5.1 source, a TV or soundbar that can only take stereo
+(for example a soundbar on optical) may drop the center channel, which is where dialogue and
+sports commentary are, and PCM did not fix that in testing. What did: setting the source device to
+stereo, or a downmixing HDMI audio extractor in front of that TV. Details in
+[docs/gotchas.md](docs/gotchas.md#lost-dialogue-on-51-sources).
+
 ### Example: switch the projector to the game console
 
 ```yaml
@@ -109,6 +128,26 @@ actions:
       entity_id: switch.projector
 ```
 
+## CEC forwarding (TV on and off with its source)
+
+Plugged straight in, an Apple TV turns the TV on when it wakes and off when it sleeps. Through
+EAV-Bridges that stops, because UniFi's firmware switches off the bridges' CEC forwarding at every
+boot. The hardware and the underlying ASPEED software can do it, and this integration can turn it
+on for you:
+
+1. Set a device SSH password in UniFi Network: **Settings > System > Device SSH Authentication**.
+2. In the integration's options: **Control** Live, **CEC forwarding** on, and the bridge SSH
+   username and password.
+
+Home Assistant then logs in to the bridges over SSH (TCP 22) and starts forwarding between each
+source and the receivers routed to it. It does it again whenever a route changes or a bridge
+restarts, because nothing on a bridge survives a restart, and checks every 30 minutes otherwise.
+Each bridge gets a **CEC** sensor showing whether it's linked.
+
+**Verified** on one source and one receiver (Apple TV to an LG TV, on and off). Read
+[docs/cec.md](docs/cec.md) before turning it on: it explains exactly what runs on the bridges, the
+SSH and security trade-offs, what is still untested, and how to undo it.
+
 ## Previews
 
 Each bridge serves a small MJPEG preview on port 8080 (no login). The camera:
@@ -131,6 +170,7 @@ Everything we learned about the bridges, including the API, internals, preview t
 measured numbers, is in [`docs/`](docs/README.md):
 
 * [Capabilities](docs/capabilities.md): what works and how well it is proven
+* [CEC forwarding](docs/cec.md): why it's off, how the integration turns it on, what runs on the bridge
 * [Console API](docs/console-api.md) and [bridge internals](docs/bridge-internals.md)
 * [Preview quality](docs/preview-quality.md): raising the preview to 720p, with measurements
 * [Measurements](docs/measurements.md), [gotchas](docs/gotchas.md), and [open questions](docs/open-questions.md)
@@ -138,10 +178,13 @@ measured numbers, is in [`docs/`](docs/README.md):
 ## Tests
 
 ```bash
-pip install pytest-homeassistant-custom-component PyTurboJPEG
+pip install pytest-homeassistant-custom-component PyTurboJPEG asyncssh
 pytest tests
 ```
 
-69 tests run the integration inside Home Assistant against a mock console: login and cookies
+111 tests run the integration inside Home Assistant against a mock console: login and cookies
 (including a cookie jar that forgets cookies like Home Assistant's), routing plans, dry run versus
-live writes, switches, previews, caching and fallbacks, and failure handling.
+live writes, switches, audio mode, previews, caching and fallbacks, and failure handling. The CEC
+tests cover planning, when the integration logs in (restarts, route changes, retries, rechecks),
+and the SSH transport against a real local SSH server; the bridge script is syntax-checked here and
+was verified on real bridges. The suite also needs `asyncssh`.

@@ -99,6 +99,7 @@ an account that can manage the Network app (otherwise **403 `{"errorCode":403,"m
 | Update a group | `PUT .../group/<id>` with the **full group object** as read, with changes applied | **Verified** (route on/off) |
 | Create a group | `POST .../group` with `name`, `type: "VIDEO"`, `host`, `clients` (no `id`/`channel`; the console assigns them) | **Verified** (one receiver, one source) |
 | Delete a group | `DELETE .../group/<id>` | **Verified** (one receiver) |
+| Set a receiver's audio mode | `PUT .../group/<id>` with that client's `audio_mode` set to `"AUTO"` or `"PCM"` | **Verified** (2026-11-11): accepted, route and other receivers unchanged |
 
 Rules this integration follows (design notes from other projects, matched by behavior here):
 
@@ -108,6 +109,12 @@ Rules this integration follows (design notes from other projects, matched by beh
 4. `mode` is `MULTICAST` when a group has 2 or more receivers, `UNICAST` for one. Recompute on every group touched. The multi-receiver case is **Unverified**.
 5. A recreated group gets a new `id` and `channel`, and the integration names it after the source,
    so a group you named by hand (e.g. "Projector") is renamed by a disconnect-then-reconnect cycle.
+
+Audio mode values seen: `AUTO` (default) and `PCM`. Others may exist; none were tried. PCM does not
+downmix 5.1 to stereo (see [gotchas](gotchas.md#lost-dialogue-on-51-sources)).
+
+The console has **no CEC setting**; CEC forwarding is configured on the bridges themselves
+([cec.md](cec.md)).
 
 ## Changing a bridge's role (source or receiver)
 

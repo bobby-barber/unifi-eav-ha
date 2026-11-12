@@ -505,3 +505,155 @@ async def test_role_control_off_blocks_direct_writes(hass, console) -> None:
     with pytest.raises(HomeAssistantError):
         await hass.data[DOMAIN][entry.entry_id].async_set_role(TX2, "client")
     assert console.writes == []
+
+
+# ================================================================== receiver audio mode
+
+async def set_audio(hass, mac, option):
+    await hass.services.async_call(
+        "select", "select_option",
+        {"entity_id": ent(hass, "select", mac, "audio_mode"), "option": option}, blocking=True,
+    )
+    await hass.async_block_till_done()
+
+
+async def test_audio_mode_select_on_receivers_only(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    assert state_of(hass, "select", RX1, "audio_mode").state == "Auto"
+    assert ent(hass, "select", TX1, "audio_mode") is None
+    assert state_of(hass, "select", RX3, "audio_mode").state == "unavailable"  # not routed
+
+
+async def test_audio_mode_change_writes_only_that_receiver(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    await set_audio(hass, RX2, "PCM")
+    assert [c["audio_mode"] for c in console.groups[0]["clients"]] == ["AUTO", "PCM"]
+    assert routes(console) == {TX1: [RX1, RX2]}  # route untouched
+    assert state_of(hass, "select", RX2, "audio_mode").state == "PCM"
+    writes = len(console.writes)
+    await set_audio(hass, RX2, "PCM")  # already PCM: nothing sent
+    assert len(console.writes) == writes
+
+
+async def test_audio_mode_dry_run_sends_nothing(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_DRY_RUN})
+    await set_audio(hass, RX1, "PCM")
+    assert console.writes == []
+    assert "audio mode -> PCM" in state_of(hass, "select", RX1, "audio_mode").attributes[
+        "last_plan"][0]
+
+
+# ================================================================== CEC forwarding
+
+from custom_components.unifi_eav_bridge.const import (  # noqa: E402
+    CONF_CEC, CONF_SSH_PASSWORD, CONF_SSH_USERNAME,
+)
+
+CEC_OPTS = {
+    CONF_CONTROL_MODE: CONTROL_LIVE, CONF_CEC: True,
+    CONF_SSH_USERNAME: "admin", CONF_SSH_PASSWORD: "bridge-pass",
+}
+
+
+@pytest.fixture
+def fake_ssh(monkeypatch):
+    """Replaces SSH: records (ip, command) and answers like the bridge script."""
+    calls: list[tuple[str, str, str]] = []
+    made: list[tuple[str, str]] = []
+
+    class Fake:
+        def __init__(self, username, password):
+            made.append((username, password))
+
+        async def __call__(self, mac, ip, command, script):
+            assert "HA_CEC result=" in script  # the real script file is sent
+            calls.append((mac, ip, command))
+            mode = command.split()[3]
+            state = "s_pre_start_srv" if mode == "host" else "s_srv_on"
+            return f"HA_CEC result=started mode={mode} state={state} target=x detail=ok\n"
+
+    monkeypatch.setattr("custom_components.unifi_eav_bridge.SshRunner", Fake)
+    return calls, made
+
+
+async def test_cec_off_by_default_no_sensor_no_ssh(hass, console, fake_ssh) -> None:
+    calls, made = fake_ssh
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    await poll(hass)
+    assert ent(hass, "sensor", TX1, "cec") is None
+    assert calls == [] and made == []
+
+
+async def test_cec_sets_up_routed_bridges_after_poll(hass, console, fake_ssh) -> None:
+    calls, made = fake_ssh
+    await setup_entry(hass, console, CEC_OPTS)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert made == [("admin", "bridge-pass")]
+    assert [(c[0], c[2]) for c in calls] == [
+        (TX1, "bash -s -- host 0002"),
+        (RX1, f"bash -s -- client {console.devices[1]['ip']}"),
+        (RX2, f"bash -s -- client {console.devices[1]['ip']}"),
+    ]
+    cec = state_of(hass, "sensor", RX1, "cec")
+    assert cec.state == "linked"
+    assert cec.attributes["link_state"] == "s_srv_on"
+    assert state_of(hass, "sensor", TX1, "cec").state == "linked"
+    assert state_of(hass, "sensor", RX3, "cec").state == "off"  # not routed
+    calls.clear()
+    await poll(hass)
+    assert calls == []  # nothing changed: no new SSH logins
+
+
+async def test_cec_follows_a_route_change(hass, console, fake_ssh) -> None:
+    calls, _ = fake_ssh
+    await setup_entry(hass, console, CEC_OPTS)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    calls.clear()
+    await select(hass, RX3, "Apple TV")
+    await poll(hass)
+    assert [(c[0], c[2].split()[3]) for c in calls] == [(RX3, "client")]
+
+
+async def test_cec_dry_run_logs_only(hass, console, fake_ssh) -> None:
+    calls, _ = fake_ssh
+    await setup_entry(hass, console, {**CEC_OPTS, CONF_CONTROL_MODE: CONTROL_DRY_RUN})
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert calls == []
+    assert state_of(hass, "sensor", RX1, "cec").state == "dry_run"
+
+
+async def test_cec_without_ssh_login_explains(hass, console, fake_ssh) -> None:
+    calls, _ = fake_ssh
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE, CONF_CEC: True})
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert calls == []
+    s = state_of(hass, "sensor", TX1, "cec")
+    assert s.state == "off"
+    assert "password missing" in s.attributes["problem"]
+
+
+async def _options(hass, entry, data):
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    return await hass.config_entries.options.async_configure(result["flow_id"], data)
+
+
+OPT_BASE = {"scan_interval": 15, "snapshot_interval": 3}
+
+
+async def test_options_cec_needs_control_and_ssh(hass, console, fake_ssh) -> None:
+    entry = await setup_entry(hass, console)
+    r = await _options(hass, entry, {**OPT_BASE, CONF_CONTROL_MODE: "off", CONF_CEC: True,
+                                     CONF_SSH_USERNAME: "a", CONF_SSH_PASSWORD: "b"})
+    assert r["errors"] == {"base": "cec_needs_control"}
+    r = await _options(hass, entry, {**OPT_BASE, CONF_CONTROL_MODE: CONTROL_LIVE,
+                                     CONF_CEC: True, CONF_SSH_USERNAME: "a"})
+    assert r["errors"] == {"base": "cec_needs_ssh"}
+
+
+async def test_options_empty_password_keeps_the_saved_one(hass, console, fake_ssh) -> None:
+    entry = await setup_entry(hass, console, CEC_OPTS)
+    r = await _options(hass, entry, {**OPT_BASE, CONF_CONTROL_MODE: CONTROL_LIVE,
+                                     CONF_CEC: True, CONF_SSH_USERNAME: "admin",
+                                     CONF_SSH_PASSWORD: ""})
+    assert r["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_SSH_PASSWORD] == "bridge-pass"

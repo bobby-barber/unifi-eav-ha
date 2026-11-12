@@ -14,16 +14,24 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .api import EavAuthError, EavConnectionError, EavConsoleClient
 from .const import (
+    CONF_CEC,
     CONF_CONTROL_MODE,
     CONF_SCAN_INTERVAL,
     CONF_SITE,
     CONF_SNAPSHOT_INTERVAL,
+    CONF_SSH_PASSWORD,
+    CONF_SSH_USERNAME,
     CONF_VERIFY_SSL,
     CONTROL_MODES,
+    CONTROL_OFF,
+    DEFAULT_CEC,
     DEFAULT_CONTROL_MODE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SITE,
@@ -118,14 +126,28 @@ class UnifiEavConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class UnifiEavOptionsFlow(OptionsFlow):
-    """Polling, preview refresh, and whether this integration may change routes."""
+    """Polling, preview refresh, whether this integration may change routes, and CEC.
+
+    CEC forwarding needs control (Live; Dry run only logs) and the bridges' SSH login. The
+    SSH password field is left empty when shown; leaving it empty keeps the saved one.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(data=user_input)
         opts = self.config_entry.options
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = dict(user_input)
+            if not data.get(CONF_SSH_PASSWORD):
+                data[CONF_SSH_PASSWORD] = opts.get(CONF_SSH_PASSWORD, "")
+            if data.get(CONF_CEC):
+                if data.get(CONF_CONTROL_MODE) == CONTROL_OFF:
+                    errors["base"] = "cec_needs_control"
+                elif not data.get(CONF_SSH_USERNAME) or not data.get(CONF_SSH_PASSWORD):
+                    errors["base"] = "cec_needs_ssh"
+            if not errors:
+                return self.async_create_entry(data=data)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -148,6 +170,14 @@ class UnifiEavOptionsFlow(OptionsFlow):
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
+                    vol.Required(CONF_CEC, default=opts.get(CONF_CEC, DEFAULT_CEC)): bool,
+                    vol.Optional(
+                        CONF_SSH_USERNAME, default=opts.get(CONF_SSH_USERNAME, "")
+                    ): str,
+                    vol.Optional(CONF_SSH_PASSWORD, default=""): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                 }
             ),
+            errors=errors,
         )

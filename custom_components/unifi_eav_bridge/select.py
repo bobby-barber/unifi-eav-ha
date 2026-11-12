@@ -1,4 +1,4 @@
-"""Receiver source selector (only when control is enabled)."""
+"""Selects (only when control is enabled): receiver source, receiver audio mode, bridge role."""
 
 from __future__ import annotations
 
@@ -12,7 +12,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from homeassistant.const import EntityCategory
 
-from .const import CONTROL_OFF, DOMAIN, NO_SOURCE, ROLE_CLIENT, ROLE_HOST, ROLE_LABELS
+from .const import (
+    AUDIO_MODE_AUTO,
+    AUDIO_MODE_LABELS,
+    CONTROL_OFF,
+    DOMAIN,
+    NO_SOURCE,
+    ROLE_CLIENT,
+    ROLE_HOST,
+    ROLE_LABELS,
+)
 from .entity import EavEntity
 
 
@@ -34,6 +43,9 @@ async def async_setup_entry(
             if bridge.role == ROLE_CLIENT and (mac, "source") not in known:
                 known.add((mac, "source"))
                 new.append(EavReceiverSource(coordinator, mac))
+            if bridge.role == ROLE_CLIENT and (mac, "audio_mode") not in known:
+                known.add((mac, "audio_mode"))
+                new.append(EavAudioMode(coordinator, mac))
         if new:
             async_add_entities(new)
 
@@ -133,3 +145,57 @@ class EavBridgeRole(EavEntity, SelectEntity):
         if role is None:
             raise ServiceValidationError(f"Unknown role: {option}")
         await self.coordinator.async_set_role(self._mac, role)
+
+
+class EavAudioMode(EavEntity, SelectEntity):
+    """A receiver's audio mode: Auto (pass the source's audio through) or PCM.
+
+    Stored on the receiver's entry in its route, so it needs the receiver to be routed and
+    is unavailable while it is not. PCM is not a stereo downmix: on a 5.1 source the
+    dialogue-only center channel can still be lost on a stereo TV (docs/gotchas.md).
+    """
+
+    _attr_translation_key = "audio_mode"
+    _attr_icon = "mdi:surround-sound"
+    _attr_entity_category = EntityCategory.CONFIG
+    _required_role = ROLE_CLIENT
+    _attr_options = list(AUDIO_MODE_LABELS.values())
+
+    def __init__(self, coordinator, mac: str) -> None:
+        super().__init__(coordinator, mac, "audio_mode")
+
+    def _entry(self) -> dict[str, Any] | None:
+        data = self.coordinator.data
+        group = data.matrix.group_of_client(self._mac) if data else None
+        if group is None:
+            return None
+        return next(
+            (c for c in group.get("clients", []) if c.get("mac", "").lower() == self._mac), None
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._entry() is not None
+
+    @property
+    def current_option(self) -> str | None:
+        entry = self._entry()
+        if entry is None:
+            return None
+        mode = entry.get("audio_mode", AUDIO_MODE_AUTO)
+        return AUDIO_MODE_LABELS.get(mode, mode)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        entry = self._entry() or {}
+        return {
+            "audio_enabled": entry.get("audio_enabled"),
+            "control_mode": self.coordinator.control_mode,
+            "last_plan": self.coordinator.last_plan,
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        mode = next((m for m, label in AUDIO_MODE_LABELS.items() if label == option), None)
+        if mode is None:
+            raise ServiceValidationError(f"Unknown audio mode: {option}")
+        await self.coordinator.async_set_audio_mode(self._mac, mode)

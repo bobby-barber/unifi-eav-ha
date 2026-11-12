@@ -33,13 +33,20 @@
     "step": {
       "init": {
         "title": "Options",
-        "description": "Control lets Home Assistant change which source each receiver watches. Start with Dry run: it only logs what it would send.",
+        "description": "Control lets Home Assistant change which source each receiver watches, and each receiver's audio mode. Start with Dry run: it only logs what it would send.\n\nCEC forwarding passes HDMI-CEC (power on / standby) from the device on a source bridge to the TVs on its receivers. UniFi's firmware has it switched off, so Home Assistant logs in to the bridges over SSH to start it, again after every bridge restart and route change. It needs Control set to Live (Dry run only logs) and the bridges' SSH login from UniFi Network (Settings > System > Device SSH Authentication). Leave the password empty to keep the saved one. Details: docs/cec.md.",
         "data": {
           "scan_interval": "Seconds between status updates",
           "snapshot_interval": "Preview refresh (seconds a picture is reused)",
-          "control_mode": "Control"
+          "control_mode": "Control",
+          "cec_forwarding": "CEC forwarding (turn TVs on and off with their source)",
+          "ssh_username": "Bridge SSH username",
+          "ssh_password": "Bridge SSH password"
         }
       }
+    },
+    "error": {
+      "cec_needs_control": "CEC forwarding needs Control set to Dry run or Live.",
+      "cec_needs_ssh": "CEC forwarding needs the bridges' SSH username and password."
     }
   },
   "entity": {
@@ -57,6 +64,17 @@
     "sensor": {
       "output_state": {
         "name": "HDMI output state"
+      },
+      "cec": {
+        "name": "CEC",
+        "state": {
+          "linked": "Linked",
+          "waiting": "Waiting for a receiver",
+          "off": "Off",
+          "pending": "Pending",
+          "error": "Error",
+          "dry_run": "Dry run"
+        }
       }
     },
     "select": {
@@ -65,6 +83,9 @@
       },
       "role": {
         "name": "Role"
+      },
+      "audio_mode": {
+        "name": "Audio mode"
       }
     },
     "switch": {

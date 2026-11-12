@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+import importlib
 import logging
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, Platform
@@ -21,20 +23,26 @@ from .api import (
     EavConnectionError,
     EavConsoleClient,
     Op,
+    plan_client_audio_mode,
     plan_client_enabled,
     plan_group_enabled,
     plan_role,
     plan_route,
 )
+from .cec import CecManager, SshRunner
 from .const import (
+    CONF_CEC,
     CONF_CONTROL_MODE,
     CONF_SCAN_INTERVAL,
     CONF_SITE,
     CONF_SNAPSHOT_INTERVAL,
+    CONF_SSH_PASSWORD,
+    CONF_SSH_USERNAME,
     CONF_VERIFY_SSL,
     CONTROL_DRY_RUN,
     CONTROL_LIVE,
     CONTROL_OFF,
+    DEFAULT_CEC,
     DEFAULT_CONTROL_MODE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SITE,
@@ -48,6 +56,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+CEC_SCRIPT = Path(__file__).with_name("cec_bridge.sh")
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -78,6 +88,8 @@ class EavCoordinator(DataUpdateCoordinator[ConsoleData]):
         self.client = client
         self._write_lock = asyncio.Lock()
         self.last_plan: list[str] = []
+        self.cec: CecManager | None = None  # set up by async_setup_entry when CEC is enabled
+        self.cec_problem: str | None = None  # why CEC forwarding can't run, if it can't
 
     # ---- options ---------------------------------------------------------------
 
@@ -96,11 +108,37 @@ class EavCoordinator(DataUpdateCoordinator[ConsoleData]):
 
     async def _async_update_data(self) -> ConsoleData:
         try:
-            return await self.client.async_get_data()
+            data = await self.client.async_get_data()
         except EavAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except (EavConnectionError, EavApiError) as err:
             raise UpdateFailed(str(err)) from err
+        self._schedule_cec(data)
+        return data
+
+    # ---- CEC forwarding ----------------------------------------------------------
+
+    def _schedule_cec(self, data: ConsoleData) -> None:
+        """After each poll, let the CEC manager catch up in the background.
+
+        Polls never wait for SSH. A round already in progress makes this a no-op.
+        """
+        if self.cec is None or self.cec.busy:
+            return
+        self.config_entry.async_create_background_task(
+            self.hass, self._async_cec_round(data), name=f"{DOMAIN} CEC forwarding"
+        )
+
+    async def _async_cec_round(self, data: ConsoleData) -> None:
+        if self.cec is None:
+            return
+        try:
+            changed = await self.cec.async_sync(data.bridges, data.matrix)
+        except Exception:  # noqa: BLE001 - never let a CEC problem break polling
+            _LOGGER.exception("CEC forwarding round failed")
+            return
+        if changed:
+            self.async_update_listeners()
 
     @property
     def bridges(self) -> dict[str, Bridge]:
@@ -197,6 +235,10 @@ class EavCoordinator(DataUpdateCoordinator[ConsoleData]):
     async def async_set_receiver_enabled(self, rx_mac: str, enabled: bool) -> None:
         await self._run_plan(lambda m: plan_client_enabled(m, rx_mac, enabled))
 
+    async def async_set_audio_mode(self, rx_mac: str, mode: str) -> None:
+        """Set a receiver's audio mode: ``AUTO`` (pass through) or ``PCM``."""
+        await self._run_plan(lambda m: plan_client_audio_mode(m, rx_mac, mode))
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up from a config entry."""
@@ -212,12 +254,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify_ssl=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
     )
     coordinator = EavCoordinator(hass, entry, client)
+    await _async_setup_cec(hass, entry, coordinator)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_on_options))
     return True
+
+
+async def _async_setup_cec(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: EavCoordinator
+) -> None:
+    """Create the CEC manager if CEC forwarding is turned on in the options.
+
+    Needs control set to Live (Dry run only logs what it would do) and the bridges' SSH
+    login (UniFi Network: Settings > System > Device SSH Authentication).
+    """
+    opts = entry.options
+    if not opts.get(CONF_CEC, DEFAULT_CEC):
+        return
+    if coordinator.control_mode == CONTROL_OFF:
+        coordinator.cec_problem = "control is off"
+        return
+    username = opts.get(CONF_SSH_USERNAME) or ""
+    password = opts.get(CONF_SSH_PASSWORD) or ""
+    if not username or not password:
+        coordinator.cec_problem = "bridge SSH username or password missing"
+        _LOGGER.warning("CEC forwarding is on but the bridge SSH login is not set in the options")
+        return
+    try:
+        # Import once off the event loop (a first import reads files from disk).
+        await hass.async_add_executor_job(importlib.import_module, "asyncssh")
+    except ImportError:
+        coordinator.cec_problem = "the asyncssh package is not installed"
+        _LOGGER.error("CEC forwarding needs the asyncssh package, which is not installed")
+        return
+    script = await hass.async_add_executor_job(CEC_SCRIPT.read_text)
+    coordinator.cec = CecManager(
+        SshRunner(username, password),
+        script,
+        dry_run=coordinator.control_mode == CONTROL_DRY_RUN,
+    )
 
 
 async def _async_reload_on_options(hass: HomeAssistant, entry: ConfigEntry) -> None:

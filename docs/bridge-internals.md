@@ -116,6 +116,26 @@ Read from the device; **nothing here was changed by hand**.
   reaches the bridge.
 * **Do not change `uav_mode` by hand.** That would skip the rest of the switch. Use the console.
 
+## HDMI-CEC (Observed, firmware 1.0.11.1297)
+
+* The SDK's CEC support is present on both roles: kernel driver `/usr/local/bin/cec.ko`
+  (sysfs `/sys/devices/platform/cec/` once loaded: `topology`, `forward_rule`, `send`, `debug_level`,
+  `arc_proxy`, ...), the `cec` app, link managers `link_mgrh_cec.sh` (source) and `link_mgrc_cec.sh`
+  (receiver), and helpers `cec_send`, `cec_power_on_tv`, `cec_power_off_tv`, `cec_topology`.
+* It is off: `/etc/init.d/rcS` sets `NO_CEC=y` at every boot, so the driver never loads.
+  UniFi's `ui-hal` has a `cec` ubus method (`ubus call hal cec '{"enable":true}'`) that saves a
+  lowercase `no_cec=n`; at boot that drives GPIO 3 high and fails to set the forward rule.
+* Network: CEC data on UDP 59800/59801, heartbeat on 59008, multicast group `225.8.<channel>`.
+* Started by hand it works (**Verified**). How, and why it can't be made permanent on the bridge:
+  [cec.md](cec.md).
+
+## Root filesystem (Verified)
+
+The kernel boots with `root=/dev/ram`: the root filesystem is a RAM disk loaded from flash, writable
+but thrown away at every restart. That is why SSH keys and any edited script vanish. What persists:
+the `astparam` settings in flash and the `/data` partition (ext4: Dante data, dropbear host keys,
+UniFi settings under `/data/persistent`). Boot runs no user script from either.
+
 ## The real video stream
 
 A receiver took in roughly **146 Mbit/s** (about 1,200 packets/s) of actual video while the

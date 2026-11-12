@@ -321,6 +321,32 @@ def plan_client_enabled(matrix: Matrix, rx_mac: str, enabled: bool) -> list[Op]:
                "enable receiver" if enabled else "disable receiver")]
 
 
+AUDIO_MODES = ("AUTO", "PCM")
+
+
+def plan_client_audio_mode(matrix: Matrix, rx_mac: str, mode: str) -> list[Op]:
+    """Set one receiver's audio mode (``AUTO`` or ``PCM``) inside its group.
+
+    The setting lives on the receiver's entry in its source's group, so the receiver must
+    be routed. Verified on hardware 2026-11-11 (VDS-04): the console accepts both values and
+    the receiver keeps its route. PCM is not a stereo downmix (see docs/gotchas.md).
+    """
+    rx_mac = rx_mac.lower()
+    if mode not in AUDIO_MODES:
+        raise EavApiError(f"unknown audio mode {mode!r}")
+    g = matrix.group_of_client(rx_mac)
+    if g is None:
+        raise EavApiError("receiver is not routed to any source; route it first")
+    clients = copy.deepcopy(g["clients"])
+    for c in clients:
+        if c.get("mac", "").lower() == rx_mac:
+            if c.get("audio_mode", "AUTO") == mode:
+                return []
+            c["audio_mode"] = mode
+    return [Op("PUT", g["id"], {**copy.deepcopy(g), "clients": clients},
+               f"receiver audio mode -> {mode}")]
+
+
 # --------------------------------------------------------------------------- role
 
 

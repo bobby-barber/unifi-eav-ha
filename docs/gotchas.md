@@ -26,8 +26,9 @@ silently, while HTTP to the same device still works, and another machine can sti
 **Cause:** the UniFi gateway's IPS flagged many quick SSH logins as an "SSH scan"
 (Emerging Threats signature 2003068, "ET SCAN Potential SSH Scan OUTBOUND") and blocked the source.
 **Fix:** add a detection exclusion for the machine that does the probing, and use **one SSH
-connection** (`ControlMaster`/`ControlPersist`) instead of one per command. Home Assistant itself
-never SSHes into a bridge, so the integration does not trigger this.
+connection** (`ControlMaster`/`ControlPersist`) instead of one per command. Home Assistant only
+SSHes into the bridges with **CEC forwarding** on, and then sparingly: one bridge at a time, only
+when something changed, otherwise once per bridge every 30 minutes ([cec.md](cec.md#when-the-integration-logs-in)).
 
 ## SSH keys added to a bridge vanish on reboot
 
@@ -52,7 +53,9 @@ Running `ssh bridge e e_ss::...` printed `ipc: command not found` and changed no
 
 * `tail -2` is rejected; use `tail -n 2`. Piping a command into a failing `tail` can cut the
   command short, so run `astparam save` **unpiped**.
-* `timeout 15 cmd` does not work the GNU way; there is no `uptime`, `pidof`, or `id`.
+* `timeout 15 cmd` works for real programs (`timeout 2 sleep 5` is killed after 2 s) but not for
+  shell builtins: `timeout 5 echo hi` fails with "can't execute 'echo'". There is no `uptime`,
+  `pidof`, `nohup`, `setsid` or `id`.
 * `df -h` is rejected; use plain `df`.
 
 ## Changing a role can rearrange your routes
@@ -64,6 +67,56 @@ the other bridge as a receiver. We rebuilt the routes by hand afterwards. Also e
 busy for about 3 to 5 minutes, its SSH key (kept in memory) disappears, and the console record and the
 bridge's own report disagree until it finishes. Do it deliberately, on an idle system, one bridge at a
 time, and check your routes afterwards. The integration refuses to start one while any bridge is busy.
+
+## Lost dialogue on 5.1 sources
+
+**Symptom:** some programs play with music and crowd noise but no commentary or dialogue, on some
+rooms only, while the same program is fine on a TV connected straight to the source.
+**Cause:** the program's audio is 5.1 with the voices only in the **center channel**, and the room's
+TV or soundbar can only take stereo. A Sonos Playbar (1st gen) connected by **optical** can't take
+multichannel PCM at all, and a small HDMI monitor with its own speakers can't either; both
+downmixed the 5.1 by dropping the center channel. Programs broadcast in stereo were fine, which is
+why it looked random. **Verified** (2026-11-11): forcing the Apple TV to stereo brought the voices
+back in both problem rooms, and the Sonos app showed a different audio format in the problem room
+than in a working 7.1 room on the same source.
+**Why the source sends 5.1 anyway:** a source bridge shows the Apple TV its own fixed EDID (named
+`EAVBRIDGE`: PCM up to 8 channels, Dolby Digital, Dolby Digital Plus, DTS, DTS-HD, TrueHD),
+whatever is connected to any receiver, so the source picks surround. The bridge's setting to copy a
+receiver's EDID instead (`ENABLE_REMOTE_EDID`) is off, and it could only follow one receiver anyway.
+**What did not help:** a receiver's **audio mode** set to **PCM** (the `Audio mode` select). It
+does not downmix to stereo.
+**What helps:** set the source device to stereo (Apple TV: Settings > Video and Audio > Audio
+Format), or put a downmixing HDMI audio extractor in front of the stereo-only TV or soundbar, or
+connect the soundbar by HDMI (ARC/eARC) instead of optical.
+
+## Use a source bridge as a source only
+
+A source bridge has an HDMI output too, and it's tempting to use it as a pass-through to a nearby
+TV. Don't if you can avoid it: in the setup above, audio and CEC problems were much harder to
+pin down with a pass-through in the chain, and removing it fixed the rest. Let a source bridge only
+take a source in, and use a receiver bridge for every display. (The source's EDID comes from the
+bridge itself either way; unplugging the pass-through changed nothing there. **Verified**.)
+
+## UniFi's own CEC switch doesn't start CEC
+
+`ubus call hal cec '{"enable":true}'` on a bridge, and setting `NO_CEC=n` in flash, both leave CEC
+forwarding off after a restart: `/etc/init.d/rcS` forces `NO_CEC=y` at every boot, and UniFi's CEC
+startup fails because the driver isn't loaded yet. See [cec.md](cec.md#why-unifis-firmware-doesnt-do-this-itself)
+for the full chain and how the integration works around it.
+
+## The SDK's CEC service ignores `kill`
+
+The bridge's CEC link manager (`link_mgrh_cec.sh` / `link_mgrc_cec.sh`) traps `SIGTERM`, so `kill`
+leaves it running. A second copy started next to it then shares the same message queue, and
+sessions fail with "Ignore. session ID doesn't match". Use `kill -9`, and run one copy only.
+
+## Newer asyncssh needs a newer `cryptography` than Home Assistant ships
+
+CEC forwarding uses `asyncssh`. asyncssh 2.24 requires `cryptography` 48 or later, while Home
+Assistant 2026.2 pins `cryptography` 46.0.5. Installing the newest asyncssh in a Home Assistant test
+environment upgraded `cryptography` and broke the pin. Home Assistant installs integration
+requirements under its own pins, so it picks a compatible asyncssh (2.23.1 here) by itself; for a
+test environment, install `asyncssh` together with `cryptography==<Home Assistant's version>`.
 
 ## Domain name clash
 

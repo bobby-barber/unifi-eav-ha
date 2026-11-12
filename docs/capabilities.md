@@ -29,7 +29,21 @@ The three receiver states are listed with timings in [bridge-internals.md](bridg
 | Multicast (one source to several receivers) | 2+ clients in one group, mode `MULTICAST` | **Unverified** (needs two receivers) |
 | Change a bridge between source and receiver role | `PUT rest/device/<_id>` with `eav_bridge_role` | **Verified** both ways on real hardware. Takes 3–5 minutes, reboots the bridge, and **can rearrange other routes**; see [console-api.md](console-api.md#changing-a-bridges-role-source-or-receiver) |
 
+| Set a receiver's audio mode (`AUTO` or `PCM`) | `PUT` the group with that client's `audio_mode` changed | **Verified**: accepted, route kept. PCM is **not** a stereo downmix ([gotchas](gotchas.md#lost-dialogue-on-51-sources)) |
+
 A read-only account can see everything but gets **HTTP 403 `No permission`** on every write.
+
+## HDMI-CEC (needs SSH to the bridges)
+
+| Capability | Confidence |
+|---|---|
+| Forward CEC from a source device to the TV on a receiver (on and standby) | **Verified**, one source to one receiver, Apple TV to an LG TV |
+| Do it through the console, or with UniFi's own `ubus call hal cec` switch | **Not possible** on firmware 1.0.11.1297: the firmware forces it off at boot |
+| Keep it across a bridge restart | **Not possible** on the bridge (RAM-disk root); the integration sets it up again |
+| Several receivers on one source | **Unverified** (multicast; should work the same way) |
+| TV remote controlling the source through the bridges | **Unverified** (the forward rule allows it) |
+
+How it works and what runs on the bridges: [cec.md](cec.md).
 
 ## Previews
 

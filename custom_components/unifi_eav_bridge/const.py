@@ -44,3 +44,36 @@ BRIDGE_PREVIEW_PORT = 8080
 NO_SOURCE = "Disconnected"  # option label for "receiver watches nothing"
 
 EVENT_DRY_RUN = f"{DOMAIN}_dry_run"
+
+# Receiver audio mode, a per-receiver field ("audio_mode") inside its route group.
+# AUTO passes the source's audio through; PCM asks for plain PCM. The console accepts both.
+# Tested 2026-11-11: PCM did NOT turn a 5.1 broadcast into stereo with the center channel
+# kept, so it is not a downmix; see docs/gotchas.md ("Lost dialogue on 5.1").
+AUDIO_MODE_AUTO = "AUTO"
+AUDIO_MODE_PCM = "PCM"
+AUDIO_MODE_LABELS = {AUDIO_MODE_AUTO: "Auto", AUDIO_MODE_PCM: "PCM"}
+
+# ---- CEC forwarding (opt-in; see docs/cec.md) --------------------------------------
+# UniFi's firmware ships with the SDK's HDMI-CEC forwarding switched off and undoes any
+# change at every bridge restart, so the integration logs in to the bridges over SSH and
+# starts it (cec_bridge.sh), again after every restart and route change.
+CONF_CEC = "cec_forwarding"
+CONF_SSH_USERNAME = "ssh_username"
+CONF_SSH_PASSWORD = "ssh_password"
+DEFAULT_CEC = False
+SSH_PORT = 22
+SSH_TIMEOUT = 20  # seconds to connect
+CEC_SCRIPT_TIMEOUT = 90  # seconds the bridge script may take (it waits for the link)
+# How often an already-linked bridge is checked anyway. Kept long on purpose: each check is
+# one SSH login, and UniFi gateways with IPS can block hosts that log in to SSH a lot.
+CEC_RECHECK_SECONDS = 30 * 60
+CEC_RETRY_SECONDS = 5 * 60  # after an error
+
+# Values of the per-bridge "CEC" sensor.
+CEC_LINKED = "linked"  # source with a receiver attached, or receiver linked to its source
+CEC_WAITING = "waiting"  # source ready, no receiver attached yet
+CEC_OFF = "off"  # not in use: no route, or forwarding stopped
+CEC_PENDING = "pending"  # wanted but not set up yet (first run, bridge restarting, ...)
+CEC_ERROR = "error"
+CEC_DRY_RUN = "dry_run"  # would be set up; control is in dry run
+CEC_STATES = [CEC_LINKED, CEC_WAITING, CEC_OFF, CEC_PENDING, CEC_ERROR, CEC_DRY_RUN]

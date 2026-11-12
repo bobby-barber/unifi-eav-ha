@@ -7,6 +7,7 @@ bridges have no public documentation, so most of this was found by observation o
 |---|---|
 | [capabilities.md](capabilities.md) | What you can do with the bridges and this integration, and how well each thing is proven |
 | [console-api.md](console-api.md) | The UniFi console endpoints used for status, routing, and snapshots, with payloads |
+| [cec.md](cec.md) | HDMI-CEC forwarding: why UniFi's firmware has it off, how the integration turns it on over SSH, what runs on the bridge |
 | [bridge-internals.md](bridge-internals.md) | What runs on a bridge: hardware, services, ports, status files, states |
 | [preview-quality.md](preview-quality.md) | How the preview video works, how to raise its quality, and the measured results |
 | [measurements.md](measurements.md) | Every number we measured: loads, bandwidth, latency, timings |
@@ -29,8 +30,8 @@ Each claim carries a confidence level:
 * Bridge firmware 1.0.11.1297 (system image A9.19.5, build 5341), Linux 4.9.0 on a single-core ARMv7.
 * Home Assistant 2026.2.x for the integration tests.
 
-Anything involving **several receivers on one source**, **several sources**, or **audio routing**
-has not been tried. Addresses and MAC addresses in these pages are placeholders
+Anything involving **several receivers on one source**, or **audio routing** (the separate audio
+matrix) has not been tried. CEC forwarding was verified with one source and one receiver. Addresses and MAC addresses in these pages are placeholders
 (`192.0.2.x`, `02:00:00:00:00:xx`).
 
 ## Tools

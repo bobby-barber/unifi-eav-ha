@@ -24,11 +24,22 @@ What we don't know yet, in rough priority order, and things worth trying.
    effect of provisioning? Would changing a bridge that is in **no** route (and has no paired unit)
    behave? Does the firmware actually get swapped, or only the boot mode?
 8. **Audio routing.** Audio has its own matrix (`proav/audio/matrix`, reported by other projects).
-   Not tried.
+   Not tried. (Per-receiver `audio_mode` in the video groups is a different thing and is verified.)
 9. **Console snapshot endpoint** (`proav/snapshot/<mac>`). Used as a fallback, never exercised on
    real hardware.
 10. **Receiver `up` flag on the output port.** Seen `false` while waiting; not checked in other states.
 11. **The "USB" and "IR" ports.** The store page says configuration is "coming in a future update".
+
+12. **CEC with several receivers on one source.** The SDK does it by multicast, and the integration
+    sets every routed receiver up, but only one receiver was tried.
+13. **Does CEC need GPIO 3 high?** It was high on the bridges where forwarding worked (because
+    UniFi's `ubus call hal cec` switch had been turned on). Try a bridge where it wasn't.
+14. **TV remote to source through the bridges.** The forward rule passes "remote control
+    pass-through"; not tried.
+15. **Will a firmware update finish UniFi's CEC feature?** If it does, the integration's option
+    should be turned off. Re-check `/etc/init.d/rcS` for `NO_CEC` after updates.
+16. **SSH password login from Home Assistant on real hardware.** The transport is tested against a
+    local SSH server, and the hardware run used a key; the bridges' dropbear accepts passwords.
 
 ## Ideas worth trying
 
