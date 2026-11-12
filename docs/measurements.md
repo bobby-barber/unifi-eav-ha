@@ -74,3 +74,13 @@ quality and for the stream frame-rate and bandwidth table.
 * Anything with more than one receiver or more than one source.
 * Several viewers on **both** bridges for longer than 20 s.
 * Behavior of the real video stream while many preview viewers are active (judged by eye only).
+
+## Role change (Verified, four bridges, console Network app 11.1.47)
+
+| Event | Time |
+|---|---|
+| Console record shows the new `eav_bridge_role` after the `PUT` | immediately |
+| Bridge busy (`state` 5) cycles until settled, first change (receiver to source) | about 170 s, two busy cycles |
+| Same, changing it back | still cycling at 300 s (settled by about 5 minutes) |
+| Same, another bridge (source to receiver) | about 320 s, three busy cycles |
+| Firmware version after a role change | unchanged (1.0.17.1715) |

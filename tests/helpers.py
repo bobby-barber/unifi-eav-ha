@@ -53,6 +53,7 @@ def devices_json(source_connected: bool = False, waiting: bool = True) -> list[d
     def host(mac, connected):
         return {
             "name": NAMES[mac], "mac": mac, "state": 1, "ip": IPS[mac], "uptime": 100,
+            "_id": f"id-{mac}", "eav_bridge_role": "host",
             "hdmi_ports": [
                 {"port_index": "1", "type": "in", "up": True, "connected": connected,
                  "resolution": "auto", "refresh_rate": "30", "color_format": "rgb"},
@@ -65,6 +66,7 @@ def devices_json(source_connected: bool = False, waiting: bool = True) -> list[d
     def recv(mac, is_waiting):
         return {
             "name": NAMES[mac], "mac": mac, "state": 1, "ip": IPS[mac], "uptime": 100,
+            "_id": f"id-{mac}", "eav_bridge_role": "client",
             "hdmi_ports": [
                 {"port_index": "1", "type": "in", "up": False, "connected": False,
                  "resolution": "auto", "refresh_rate": "30", "color_format": "rgb"},
@@ -106,6 +108,8 @@ class MockConsole:
         self.preview_ok = True  # bridge preview port answers
         self.preview_hits = 0
         self.snapshot_hits = 0
+        self.instant_switch = False  # False: a role change leaves the device busy until finished
+        self.device_put_rc = "ok"
         app = web.Application()
         app.router.add_post("/api/auth/login", self.login)
         base = "/proxy/network"
@@ -115,6 +119,7 @@ class MockConsole:
         app.router.add_put(f"{base}/v2/api/site/{{site}}/proav/video/group/{{gid}}", self.update)
         app.router.add_delete(f"{base}/v2/api/site/{{site}}/proav/video/group/{{gid}}", self.delete)
         app.router.add_get(f"{base}/v2/api/site/{{site}}/proav/snapshot/{{mac}}", self.snapshot)
+        app.router.add_put(f"{base}/api/s/{{site}}/rest/device/{{did}}", self.update_device)
         app.router.add_get("/", self.preview)  # what a bridge itself serves on its preview port
         self.app = app
 
@@ -212,6 +217,35 @@ class MockConsole:
         if len(self.groups) == before:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response({})
+
+    async def update_device(self, req):
+        """Like the real console: the new role shows at once, the bridge reports it later.
+
+        The change puts the device in state 5 (busy) until ``finish_switch`` is called;
+        with ``instant_switch`` it completes immediately.
+        """
+        if (bad := self._check_write(req)) is not None:
+            return bad
+        did, body = req.match_info["did"], await req.json()
+        self.writes.append(("PUT", f"device:{did}", copy.deepcopy(body)))
+        dev = next((d for d in self.devices if d.get("_id") == did), None)
+        if dev is None:
+            return web.json_response({"meta": {"rc": "error"}, "data": []}, status=404)
+        role = body.get("eav_bridge_role")
+        if role not in ("host", "client"):
+            return web.json_response({"meta": {"rc": "error", "msg": "bad role"}}, status=400)
+        dev["eav_bridge_role"] = role
+        if self.instant_switch:
+            dev["video_info"]["role"] = role
+        else:
+            dev["state"] = 5
+        return web.json_response({"meta": {"rc": self.device_put_rc}, "data": [dev]})
+
+    def finish_switch(self, mac: str) -> None:
+        """The bridge has rebooted and now reports its new role."""
+        dev = next(d for d in self.devices if d.get("mac") == mac)
+        dev["video_info"]["role"] = dev["eav_bridge_role"]
+        dev["state"] = 1
 
     async def snapshot(self, req):
         if not self._authed(req):

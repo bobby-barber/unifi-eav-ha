@@ -24,7 +24,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import ROLE_CLIENT, ROLE_HOST, STATE_WAITING_FOR_SOURCE
+from .const import ROLE_CLIENT, ROLE_HOST, STATE_CONNECTED, STATE_WAITING_FOR_SOURCE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +81,21 @@ class Bridge:
     ports: list[HdmiPort] = field(default_factory=list)
     uptime: int | None = None
     raw_video_info: dict[str, Any] = field(default_factory=dict)
+    device_id: str | None = None  # the console's own id for the device (needed to change its role)
+    configured_role: str | None = None  # "eav_bridge_role": what the console is set to
+    state: int | None = None  # console device state; 1 = connected, other = busy/offline
+
+    @property
+    def switching(self) -> bool:
+        """True while the bridge is changing role (or otherwise not idle and connected).
+
+        A role change reboots the bridge (several minutes, with repeated busy states);
+        the console shows the new role at once but the bridge reports it only when done.
+        """
+        live = self.raw_video_info.get("role")
+        if self.state is not None and self.state != STATE_CONNECTED:
+            return True
+        return self.configured_role is not None and live is not None and live != self.configured_role
 
     def port(self, direction: str) -> HdmiPort | None:
         for p in self.ports:
@@ -158,9 +173,12 @@ def parse_bridges(devices: list[dict[str, Any]]) -> dict[str, Bridge]:
         if not ports or not mac:
             continue
         video_info = dev.get("video_info") or {}
+        configured = dev.get("eav_bridge_role")
+        if configured not in (ROLE_HOST, ROLE_CLIENT):
+            configured = None
         role = video_info.get("role")
         if role not in (ROLE_HOST, ROLE_CLIENT):
-            role = None
+            role = configured  # mid-switch the bridge may not report video_info
         bridges[mac.lower()] = Bridge(
             mac=mac.lower(),
             name=dev.get("name") or dev.get("hostname") or mac,
@@ -171,6 +189,9 @@ def parse_bridges(devices: list[dict[str, Any]]) -> dict[str, Bridge]:
             ports=[_port_from_json(p) for p in ports],
             uptime=dev.get("uptime"),
             raw_video_info=video_info,
+            device_id=dev.get("_id"),
+            configured_role=configured,
+            state=dev.get("state"),
         )
     return bridges
 
@@ -298,6 +319,53 @@ def plan_client_enabled(matrix: Matrix, rx_mac: str, enabled: bool) -> list[Op]:
             c["enabled"] = enabled
     return [Op("PUT", g["id"], {**copy.deepcopy(g), "clients": clients},
                "enable receiver" if enabled else "disable receiver")]
+
+
+# --------------------------------------------------------------------------- role
+
+
+@dataclass
+class RoleOp:
+    """Change one bridge between source (host) and receiver (client)."""
+
+    device_id: str
+    mac: str
+    role: str
+    note: str = ""
+
+    @property
+    def body(self) -> dict[str, Any]:
+        return {"eav_bridge_role": self.role}
+
+    def describe(self) -> str:
+        return f"PUT rest/device/{self.device_id}  ({self.note})"
+
+
+def plan_role(bridges: dict[str, Bridge], mac: str, role: str) -> list[RoleOp]:
+    """Work out the write that makes bridge ``mac`` a source or a receiver.
+
+    Pure function. Refuses while ANY bridge is still mid-change: on real hardware, changing
+    one bridge made the console reassign its paired bridge and routes too, so changes must
+    not overlap. Returns [] if the bridge already has that role.
+    """
+    mac = mac.lower()
+    if role not in (ROLE_HOST, ROLE_CLIENT):
+        raise EavApiError(f"unknown role {role!r}")
+    bridge = bridges.get(mac)
+    if bridge is None:
+        raise EavApiError(f"unknown bridge {mac}")
+    if not bridge.device_id:
+        raise EavApiError("the console did not report an id for this bridge")
+    busy = [b.name for b in bridges.values() if b.switching or not b.online]
+    if busy:
+        raise EavApiError(
+            "wait for these bridges to finish starting up or changing role: " + ", ".join(busy)
+        )
+    if (bridge.configured_role or bridge.role) == role:
+        return []
+    return [RoleOp(bridge.device_id, mac, role,
+                   f"{bridge.name}: {bridge.configured_role or bridge.role} -> {role}; "
+                   "reboots the bridge, takes several minutes")]
 
 
 # --------------------------------------------------------------------------- client
@@ -430,6 +498,15 @@ class EavConsoleClient:
         return await self._request("GET", self._proav(f"snapshot/{mac}"), raw=True)
 
     # ---- writes ---------------------------------------------------------------
+
+    async def async_set_role(self, op: RoleOp) -> None:
+        """Change a bridge's role. The bridge then reboots; this takes several minutes."""
+        result = await self._request(
+            "PUT", self._site_api(f"rest/device/{op.device_id}"), body=op.body
+        )
+        rc = ((result or {}).get("meta") or {}).get("rc") if isinstance(result, dict) else None
+        if rc != "ok":
+            raise EavApiError(f"console did not accept the role change: {result!r}"[:200])
 
     async def async_apply(self, ops: list[Op]) -> None:
         """Send planned writes in order. Stops at the first failure."""

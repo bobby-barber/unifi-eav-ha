@@ -35,6 +35,8 @@ STATE_WAITING_FOR_SOURCE = "WAITING_HOST_MODE"
 
 ROLE_HOST = "host"  # transmitter / source side
 ROLE_CLIENT = "client"  # receiver / display side
+ROLE_LABELS = {ROLE_HOST: "Source", ROLE_CLIENT: "Receiver"}  # what the role select shows
+STATE_CONNECTED = 1  # stat/device "state" of a bridge that is connected and idle
 
 # Each bridge serves a small unauthenticated MJPEG preview on this port.
 BRIDGE_PREVIEW_PORT = 8080

@@ -55,6 +55,8 @@ port carries the extra **`state`** string (see
 | `hdmi_ports[].up` | port is active. Seen `true` on a source's input and `false` on a receiver's output while it was waiting; not checked in other states |
 | `hdmi_ports[].resolution`, `refresh_rate`, `color_format` | **configured settings**, not live measurements |
 | `ip` | the bridge's own address (used for previews) |
+| `_id` | the console's id for the device (needed to change its role) |
+| `eav_bridge_role` | `host` (source) or `client` (receiver): what the console has it set to. **Verified** |
 | `video_info.role` | `host` = source, `client` = receiver |
 | `video_info.channel` | route channel |
 
@@ -107,6 +109,31 @@ Rules this integration follows (design notes from other projects, matched by beh
 5. A recreated group gets a new `id` and `channel`, and the integration names it after the source,
    so a group you named by hand (e.g. "Projector") is renamed by a disconnect-then-reconnect cycle.
 
+## Changing a bridge's role (source or receiver)
+
+`PUT /proxy/network/api/s/<site>/rest/device/<_id>` with body `{"eav_bridge_role": "host"}` or
+`{"eav_bridge_role": "client"}`. The response is `{"meta": {"rc": "ok"}, "data": [<device>]}`.
+Needs the CSRF header and an account that can manage the Network app. **Verified** on real hardware,
+in both directions, on two bridges. It is the same call the Network app's **Convert to Output** button
+makes (Network app 11.1.47, Pro AV section, shown for a source with no outputs).
+
+What happens next (**Observed**):
+
+* The console's record shows the new `eav_bridge_role` **immediately**, while the bridge still reports
+  its old role in `video_info.role`, so the two disagree until the bridge finishes.
+* The device `state` leaves `1` and goes busy (`5`) in repeated cycles for **about 3 to 5 minutes**;
+  one unit was still cycling at 5 minutes. The bridge reboots; its firmware version string did not
+  change.
+* **The console may rearrange other bridges and routes.** Changing a receiver (that was paired with a
+  source in a route) to a source also turned its paired source into a receiver, and both were put into
+  the first source's group, so that group suddenly fed three receivers. Changing the receiver back did
+  not undo it. The cause is not understood, so treat a role change as something that can alter every
+  route. See [gotchas.md](gotchas.md#changing-a-role-can-rearrange-your-routes).
+* Routes had to be rebuilt by hand afterwards with the normal group endpoints above.
+
+The integration refuses a role change while **any** bridge is busy or offline, and never does one
+automatically.
+
 ## Snapshot (fallback)
 
 `GET .../proav/snapshot/<mac>` is reported to return a JPEG of a source bridge's input. The
@@ -120,6 +147,5 @@ The Network app's `server.log` showed adoption and PoE-validation events for the
 
 ## Not found
 
-* An endpoint to change a bridge's role (source/receiver).
 * Live source resolution or audio format through the console.
 * Any official or documented API for these devices.

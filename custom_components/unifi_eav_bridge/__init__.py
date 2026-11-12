@@ -23,6 +23,7 @@ from .api import (
     Op,
     plan_client_enabled,
     plan_group_enabled,
+    plan_role,
     plan_route,
 )
 from .const import (
@@ -156,6 +157,39 @@ class EavCoordinator(DataUpdateCoordinator[ConsoleData]):
         """Make a receiver watch a source (``None`` = nothing)."""
         tx_name = self.bridges[tx_mac].name if tx_mac and tx_mac in self.bridges else "Source"
         await self._run_plan(lambda m: plan_route(m, rx_mac, tx_mac, tx_name=tx_name))
+
+    async def async_set_role(self, mac: str, role: str) -> None:
+        """Make a bridge a source (``host``) or a receiver (``client``).
+
+        Slow and disruptive: the bridge reboots (about 3 to 5 minutes or more), and the
+        console may change routes. Plans from freshly read device data.
+        """
+        if self.control_mode == CONTROL_OFF:
+            raise HomeAssistantError("Control is turned off for this integration")
+        async with self._write_lock:
+            try:
+                bridges = await self.client.async_get_bridges()  # never plan from stale data
+                ops = plan_role(bridges, mac, role)
+                self.last_plan = [op.describe() for op in ops]
+                if self.control_mode == CONTROL_DRY_RUN:
+                    _LOGGER.warning(
+                        "DRY RUN, nothing sent. Would send: %s", self.last_plan or "(nothing to do)"
+                    )
+                    self.hass.bus.async_fire(
+                        EVENT_DRY_RUN,
+                        {"plan": self.last_plan, "bodies": [op.body for op in ops]},
+                    )
+                    self.async_update_listeners()
+                    return
+                for op in ops:
+                    _LOGGER.warning("Changing bridge role: %s", op.describe())
+                    await self.client.async_set_role(op)
+            except EavAuthError as err:
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except EavApiError as err:
+                raise HomeAssistantError(f"Role change failed: {err}") from err
+        if self.control_mode == CONTROL_LIVE:
+            await self.async_refresh()
 
     async def async_set_group_enabled(self, group_id: str, enabled: bool) -> None:
         await self._run_plan(lambda m: plan_group_enabled(m, group_id, enabled))

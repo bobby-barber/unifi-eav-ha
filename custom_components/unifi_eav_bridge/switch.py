@@ -20,19 +20,17 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]
     if coordinator.control_mode == CONTROL_OFF:
         return
-    known: set[str] = set()
+    known: set[tuple[str, str]] = set()
 
     @callback
     def _add_new() -> None:
         new = []
         for mac, bridge in coordinator.bridges.items():
-            if mac in known:
-                continue
-            if bridge.role == ROLE_CLIENT:
-                known.add(mac)
+            if bridge.role == ROLE_CLIENT and (mac, "output") not in known:
+                known.add((mac, "output"))
                 new.append(EavReceiverOutput(coordinator, mac))
-            elif bridge.role == ROLE_HOST:
-                known.add(mac)
+            elif bridge.role == ROLE_HOST and (mac, "route") not in known:
+                known.add((mac, "route"))
                 new.append(EavSourceRoute(coordinator, mac))
         if new:
             async_add_entities(new)
@@ -45,6 +43,7 @@ class EavReceiverOutput(EavEntity, SwitchEntity):
     """Turns one receiver's video output on or off without changing its source."""
 
     _attr_translation_key = "output_enabled"
+    _required_role = ROLE_CLIENT
     _attr_icon = "mdi:television"
 
     def __init__(self, coordinator, mac: str) -> None:
@@ -72,6 +71,7 @@ class EavSourceRoute(EavEntity, SwitchEntity):
     """Starts or stops a source's whole route (all receivers watching it)."""
 
     _attr_translation_key = "route_enabled"
+    _required_role = ROLE_HOST
     _attr_icon = "mdi:video-switch"
 
     def __init__(self, coordinator, mac: str) -> None:

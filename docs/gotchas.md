@@ -55,6 +55,16 @@ Running `ssh bridge e e_ss::...` printed `ipc: command not found` and changed no
 * `timeout 15 cmd` does not work the GNU way; there is no `uptime`, `pidof`, or `id`.
 * `df -h` is rejected; use plain `df`.
 
+## Changing a role can rearrange your routes
+
+Changing a bridge between source and receiver is one API call, but the console did more than we asked.
+Turning a receiver (paired with a source) into a source also turned that source into a receiver and
+put both into the first source's route, which then fed three receivers. Turning the receiver back left
+the other bridge as a receiver. We rebuilt the routes by hand afterwards. Also expect: the bridge is
+busy for about 3 to 5 minutes, its SSH key (kept in memory) disappears, and the console record and the
+bridge's own report disagree until it finishes. Do it deliberately, on an idle system, one bridge at a
+time, and check your routes afterwards. The integration refuses to start one while any bridge is busy.
+
 ## Domain name clash
 
 Two other EAV projects use the Home Assistant domain `unifi_eav`. This one uses

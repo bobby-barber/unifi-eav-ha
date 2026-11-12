@@ -62,6 +62,9 @@
     "select": {
       "source": {
         "name": "Source"
+      },
+      "role": {
+        "name": "Role"
       }
     },
     "switch": {

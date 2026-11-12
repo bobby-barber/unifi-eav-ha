@@ -18,8 +18,11 @@ What we don't know yet, in rough priority order, and things worth trying.
 5. **Does a firmware update reset saved preview settings?** Unknown. Re-check `astparam g SS_STREAM_OPTION`
    after updating.
 6. **Does the console ever overwrite `SS_*` settings?** It did not during our reboot test.
-7. **Changing a bridge's role** (source vs receiver). No endpoint found. Perhaps a UniFi app action
-   that the integration could call; capturing the web app's network requests would show it.
+7. **Why a role change rearranges other bridges and routes.** The call works (see
+   [console-api.md](console-api.md#changing-a-bridges-role-source-or-receiver)), but flipping one bridge
+   also flipped its paired bridge and rebuilt routes. Is that the console's pairing logic, or a side
+   effect of provisioning? Would changing a bridge that is in **no** route (and has no paired unit)
+   behave? Does the firmware actually get swapped, or only the boot mode?
 8. **Audio routing.** Audio has its own matrix (`proav/audio/matrix`, reported by other projects).
    Not tried.
 9. **Console snapshot endpoint** (`proav/snapshot/<mac>`). Used as a fallback, never exercised on

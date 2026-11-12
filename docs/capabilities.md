@@ -27,7 +27,7 @@ The three receiver states are listed with timings in [bridge-internals.md](bridg
 | Connect a receiver to a source | `POST` a new group, or `PUT` it into the source's existing group | **Verified** for `POST`; joining an existing multi-receiver group is **Unverified** |
 | Move a receiver between sources | leave the old group, then join the new one | **Unverified** (needs two sources) |
 | Multicast (one source to several receivers) | 2+ clients in one group, mode `MULTICAST` | **Unverified** (needs two receivers) |
-| Change a bridge between source and receiver role | unknown | **Unverified**; no endpoint found |
+| Change a bridge between source and receiver role | `PUT rest/device/<_id>` with `eav_bridge_role` | **Verified** both ways on real hardware. Takes 3–5 minutes, reboots the bridge, and **can rearrange other routes**; see [console-api.md](console-api.md#changing-a-bridges-role-source-or-receiver) |
 
 A read-only account can see everything but gets **HTTP 403 `No permission`** on every write.
 

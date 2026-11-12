@@ -13,6 +13,7 @@ class EavEntity(CoordinatorEntity):
     """Base class: one entity tied to one bridge (by MAC)."""
 
     _attr_has_entity_name = True
+    _required_role: str | None = None  # set on entities that only make sense for one role
 
     def __init__(self, coordinator, mac: str, key: str) -> None:
         super().__init__(coordinator)
@@ -28,7 +29,11 @@ class EavEntity(CoordinatorEntity):
         # Stay "available" while the console is up even if the bridge is
         # offline: the Online sensor itself reports that, and automations get
         # a real False instead of "unavailable".
-        return super().available and self.bridge is not None
+        b = self.bridge
+        if not super().available or b is None:
+            return False
+        # An entity made for a source/receiver goes unavailable if the bridge changes role.
+        return self._required_role is None or b.role == self._required_role
 
     @property
     def device_info(self) -> DeviceInfo:

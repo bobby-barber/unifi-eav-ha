@@ -24,7 +24,8 @@ Each claim carries a confidence level:
 ## Test setup behind these notes
 
 * One UniFi Cloud Key Gen2 Plus console running the Network app.
-* Two EAV-Bridges: one source (an Apple TV) and one receiver (a projector), one route.
+* Four EAV-Bridges: two sources and two receivers. Most measurements were taken with one source
+  (an Apple TV) and one receiver (a projector) on one route; the role-change tests used all four.
 * Bridge firmware 1.0.11.1297 (system image A9.19.5, build 5341), Linux 4.9.0 on a single-core ARMv7.
 * Home Assistant 2026.2.x for the integration tests.
 

@@ -20,19 +20,21 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    known: set[str] = set()
+    known: set[tuple[str, str]] = set()
 
     @callback
     def _add_new() -> None:
         new: list[EavEntity] = []
         for mac, bridge in coordinator.bridges.items():
-            if mac in known:
-                continue
-            known.add(mac)
-            new.append(EavOnline(coordinator, mac))
-            if bridge.role == ROLE_HOST:
+            if (mac, "online") not in known:
+                known.add((mac, "online"))
+                new.append(EavOnline(coordinator, mac))
+            # Created for the role the bridge has now; kept (unavailable) if it changes role.
+            if bridge.role == ROLE_HOST and (mac, "source_signal") not in known:
+                known.add((mac, "source_signal"))
                 new.append(EavSourceSignal(coordinator, mac))
-            elif bridge.role == ROLE_CLIENT:
+            elif bridge.role == ROLE_CLIENT and (mac, "waiting_for_source") not in known:
+                known.add((mac, "waiting_for_source"))
                 new.append(EavWaitingForSource(coordinator, mac))
         if new:
             async_add_entities(new)
@@ -60,6 +62,7 @@ class EavSourceSignal(EavEntity, BinarySensorEntity):
     """On a source bridge: is a device (Apple TV, etc.) driving its HDMI input?"""
 
     _attr_translation_key = "source_signal"
+    _required_role = ROLE_HOST
     _attr_icon = "mdi:hdmi-port"
 
     def __init__(self, coordinator, mac: str) -> None:
@@ -91,6 +94,7 @@ class EavWaitingForSource(EavEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "waiting_for_source"
+    _required_role = ROLE_CLIENT
     _attr_icon = "mdi:video-input-hdmi"
 
     def __init__(self, coordinator, mac: str) -> None:

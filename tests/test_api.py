@@ -217,3 +217,62 @@ async def test_group_toggle_applies(client, console) -> None:
     data = await client.async_get_data()
     await client.async_apply(api.plan_group_enabled(data.matrix, "g-tv", False))
     assert console.groups[0]["enabled"] is False
+
+
+# ================================================================== bridge role planner
+
+def _bridges(**over):
+    from tests.helpers import devices_json
+    return api.parse_bridges(devices_json())
+
+
+def test_parse_reads_role_id_and_state():
+    b = _bridges()[TX1]
+    assert (b.role, b.configured_role, b.device_id, b.state) == ("host", "host", f"id-{TX1}", 1)
+    assert b.switching is False
+
+
+def test_switching_when_console_role_differs_from_reported_or_not_connected():
+    bridges = _bridges()
+    bridges[TX1].configured_role = "client"  # console says client, bridge still reports host
+    assert bridges[TX1].switching is True
+    bridges = _bridges()
+    bridges[RX1].state = 5
+    assert bridges[RX1].switching is True
+
+
+def test_plan_role_builds_one_put():
+    ops = api.plan_role(_bridges(), TX2, "client")
+    assert len(ops) == 1 and ops[0].device_id == f"id-{TX2}"
+    assert ops[0].body == {"eav_bridge_role": "client"}
+
+
+def test_plan_role_noop_when_already_that_role():
+    assert api.plan_role(_bridges(), TX1, "host") == []
+
+
+def test_plan_role_refuses_unknown_bridge_role_and_missing_id():
+    bridges = _bridges()
+    with pytest.raises(api.EavApiError, match="unknown bridge"):
+        api.plan_role(bridges, "ff:ff:ff:ff:ff:ff", "host")
+    with pytest.raises(api.EavApiError, match="unknown role"):
+        api.plan_role(bridges, TX1, "banana")
+    bridges[TX2].device_id = None
+    with pytest.raises(api.EavApiError, match="id"):
+        api.plan_role(bridges, TX2, "client")
+
+
+def test_plan_role_refuses_while_any_bridge_is_busy_or_offline():
+    bridges = _bridges()
+    bridges[RX2].state = 5
+    with pytest.raises(api.EavApiError, match="wait for"):
+        api.plan_role(bridges, TX2, "client")
+
+
+async def test_client_sends_the_role_put(console):
+    async with aiohttp.ClientSession() as session:
+        c = api.EavConsoleClient(session, console.url, "ha", "good-password")
+        bridges = await c.async_get_bridges()
+        op = api.plan_role(bridges, TX2, "client")[0]
+        await c.async_set_role(op)
+    assert console.writes[-1] == ("PUT", f"device:id-{TX2}", {"eav_bridge_role": "client"})

@@ -23,10 +23,8 @@ async def async_setup_entry(
     def _add_new() -> None:
         new: list[EavEntity] = []
         for mac, bridge in coordinator.bridges.items():
-            if mac in known:
-                continue
-            known.add(mac)
-            if bridge.role == ROLE_CLIENT:
+            if mac not in known and bridge.role == ROLE_CLIENT:
+                known.add(mac)
                 new.append(EavOutputState(coordinator, mac))
         if new:
             async_add_entities(new)
@@ -43,6 +41,7 @@ class EavOutputState(EavEntity, SensorEntity):
     """
 
     _attr_translation_key = "output_state"
+    _required_role = ROLE_CLIENT
     _attr_icon = "mdi:video-wireless"
 
     def __init__(self, coordinator, mac: str) -> None:

@@ -403,3 +403,105 @@ async def test_live_stream_passes_through(hass, console, hass_client) -> None:
     assert "multipart/x-mixed-replace" in resp.headers["Content-Type"]
     body = await resp.read()
     assert MockConsole.BRIDGE_JPEG in body
+
+
+# ================================================================== bridge role (source / receiver)
+
+async def set_role(hass, mac, option):
+    await hass.services.async_call(
+        "select", "select_option",
+        {"entity_id": ent(hass, "select", mac, "role"), "option": option}, blocking=True,
+    )
+    await hass.async_block_till_done()
+
+
+def device_puts(console):
+    return [w for w in console.writes if w[1].startswith("device:")]
+
+
+async def test_role_select_only_with_control_on(hass, console) -> None:
+    await setup_entry(hass, console)
+    assert ent(hass, "select", TX1, "role") is None
+
+
+async def test_role_select_shows_current_role_for_every_bridge(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    assert state_of(hass, "select", TX1, "role").state == "Source"
+    assert state_of(hass, "select", RX1, "role").state == "Receiver"
+    assert set(state_of(hass, "select", RX1, "role").attributes["options"]) == {"Source", "Receiver"}
+    assert state_of(hass, "select", RX1, "role").attributes["switching"] is False
+
+
+async def test_role_dry_run_sends_nothing(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_DRY_RUN})
+    events = []
+    hass.bus.async_listen(EVENT_DRY_RUN, events.append)
+    await set_role(hass, TX2, "Receiver")
+    assert console.writes == []
+    assert events[0].data["bodies"] == [{"eav_bridge_role": "client"}]
+    assert "reboots" in state_of(hass, "select", TX2, "role").attributes["last_plan"][0]
+
+
+async def test_live_role_change_sends_one_put_and_shows_switching(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    await set_role(hass, TX2, "Receiver")
+    assert device_puts(console) == [("PUT", f"device:id-{TX2}", {"eav_bridge_role": "client"})]
+    s = state_of(hass, "select", TX2, "role")
+    assert s.state == "Receiver"  # the console already shows the new role
+    assert s.attributes["switching"] is True  # but the bridge has not finished
+    assert s.attributes["reported_role"] == "Source"
+
+
+async def test_entities_follow_the_bridge_after_it_changes_role(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    assert state_of(hass, "binary_sensor", TX2, "source_signal").state != "unavailable"
+    await set_role(hass, TX2, "Receiver")
+    console.finish_switch(TX2)
+    await poll(hass)
+    # source-only entities are now unavailable; receiver ones have appeared and work
+    assert state_of(hass, "binary_sensor", TX2, "source_signal").state == "unavailable"
+    assert state_of(hass, "select", TX2, "role").attributes["switching"] is False
+    assert ent(hass, "select", TX2, "source") is not None
+    assert state_of(hass, "select", TX2, "source").state == NO_SOURCE
+    assert ent(hass, "binary_sensor", TX2, "waiting_for_source") is not None
+    # and back again: the original entities come back instead of duplicating
+    await set_role(hass, TX2, "Source")
+    console.finish_switch(TX2)
+    await poll(hass)
+    assert state_of(hass, "binary_sensor", TX2, "source_signal").state != "unavailable"
+    assert state_of(hass, "select", TX2, "source").state == "unavailable"
+
+
+async def test_role_change_refused_while_any_bridge_is_busy(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    await set_role(hass, TX2, "Receiver")  # starts a switch that has not finished
+    with pytest.raises(HomeAssistantError, match="wait for"):
+        await set_role(hass, RX3, "Source")
+    assert len(device_puts(console)) == 1  # the second one never reached the console
+
+
+async def test_choosing_the_current_role_sends_nothing(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    await set_role(hass, TX1, "Source")
+    assert console.writes == []
+
+
+async def test_role_change_permission_error_is_explained(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    console.csrf = "rotated"  # the mock answers writes with 403 when the CSRF header is wrong
+    with pytest.raises(HomeAssistantError, match="not allowed to change"):
+        await set_role(hass, TX2, "Receiver")
+
+
+async def test_role_change_rejected_by_console_raises(hass, console) -> None:
+    await setup_entry(hass, console, {CONF_CONTROL_MODE: CONTROL_LIVE})
+    console.device_put_rc = "error"
+    with pytest.raises(HomeAssistantError, match="did not accept"):
+        await set_role(hass, TX2, "Receiver")
+
+
+async def test_role_control_off_blocks_direct_writes(hass, console) -> None:
+    entry = await setup_entry(hass, console)
+    with pytest.raises(HomeAssistantError):
+        await hass.data[DOMAIN][entry.entry_id].async_set_role(TX2, "client")
+    assert console.writes == []

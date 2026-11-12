@@ -38,6 +38,7 @@ Don't SSH into the bridges in a loop; an intrusion-prevention system may block y
 | `sensor.<receiver>_hdmi_output_state` | receiver | Raw firmware state (e.g. `WAITING_HOST_MODE`) |
 | `camera.<bridge>_preview` | every bridge | Picture from the bridge, plus a live stream |
 | `select.<receiver>_source` | receiver | **Control.** Which source it watches, or `Disconnected` |
+| `select.<bridge>_role` | every bridge | **Control.** Source or Receiver. Reboots the bridge (3–5 min) and can rearrange routes; see below |
 | `switch.<receiver>_output` | receiver | **Control.** Receiver's output on/off, keeps its source |
 | `switch.<source>_route` | source | **Control.** Starts/stops the whole route from that source |
 
@@ -69,8 +70,18 @@ made in the UniFi app in the meantime are respected.
 read-only account works for status and previews but the console answers changes with
 `403 No permission`. Use a limited, local-only account with Network admin rights.
 
-Not supported: changing a bridge between source and receiver (the console's way of doing that
-isn't known yet).
+### Changing a bridge between Source and Receiver
+
+Each bridge has a **Role** select (a configuration entity). Choosing the other role makes the console
+reboot the bridge, which takes **3 to 5 minutes** or more, and the entities for the old role become
+unavailable while ones for the new role appear. Be careful:
+
+* On real hardware the console **also changed other bridges and routes** (a paired bridge flipped
+  too, and routes were merged). Check your routes afterwards, and do it on an idle system.
+* The integration refuses a role change while any bridge is busy or offline, and it never changes a
+  role on its own. Dry run shows what would be sent.
+* It uses the same call as the Network app's "Convert to Output" button; details in
+  [docs/console-api.md](docs/console-api.md#changing-a-bridges-role-source-or-receiver).
 
 ### Example: switch the projector to the game console
 
@@ -131,6 +142,6 @@ pip install pytest-homeassistant-custom-component PyTurboJPEG
 pytest tests
 ```
 
-52 tests run the integration inside Home Assistant against a mock console: login and cookies
+69 tests run the integration inside Home Assistant against a mock console: login and cookies
 (including a cookie jar that forgets cookies like Home Assistant's), routing plans, dry run versus
 live writes, switches, previews, caching and fallbacks, and failure handling.

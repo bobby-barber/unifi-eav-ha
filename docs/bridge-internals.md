@@ -96,6 +96,26 @@ on `PATH`; otherwise it prints `ipc: command not found` and does nothing.
 
 See [preview-quality.md](preview-quality.md).
 
+## How the role (source or receiver) is stored (Observed)
+
+Read from the device; **nothing here was changed by hand**.
+
+* The role is the U-Boot variable **`uav_mode`**, `host` (source) or `client` (receiver). Read it
+  with `fw_printenv uav_mode` (`fw_printenv` lives in `/usr/sbin`, which is not on the PATH of a
+  non-interactive SSH session). The kernel command line carries it as `uav_mode=host|client`.
+* Every boot, `/etc/init.d/rcS` reads it and picks the platform (`ast1530-h-v1` for a source,
+  `ast1530-c-v1` for a receiver). A receiver also gets display and input device nodes. The device tree
+  names the board "AST1530 Host EVB" or "Client EVB".
+* U-Boot has helper commands `force_uav_mode host|client` and `reset_uav_mode` (back to what the
+  device tree says). The host and client builds are separate images (`all.bin` and `allc.bin` for
+  network boot).
+* The bridge's `fwupdate` program contains a **role switch** routine: it handles an upgrade request
+  with an "other role" option, sets `uav_mode` and the boot image, reboots, and rolls back if
+  something fails. It refuses if another image slot is damaged or an upgrade is running. The
+  Ubiquiti agent (`mcad`) and `ui-hal` also read the role. This is how the console's role change
+  reaches the bridge.
+* **Do not change `uav_mode` by hand.** That would skip the rest of the switch. Use the console.
+
 ## The real video stream
 
 A receiver took in roughly **146 Mbit/s** (about 1,200 packets/s) of actual video while the
